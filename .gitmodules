@@ -1,0 +1,9 @@
+[submodule "corrigeExamBack"]
+	path = corrigeExamBack
+	url = https://github.com/DEVhaitam/corrigeExamBack.git
+	branch = deploy
+
+[submodule "corrigeExamFront"]
+	path = corrigeExamFront
+	url = https://github.com/DEVhaitam/corrigeExamFront.git
+	branch = main
