@@ -432,35 +432,35 @@ _DIURNAL_TARGET = {
 }.get(INTENSITY, 30)
 
 
-class DiurnalShape(LoadTestShape):
-    """
-    W4 diurnal pattern (only active when WORKLOAD == W4-mixed).
+if WORKLOAD == "W4-mixed":
+    class DiurnalShape(LoadTestShape):
+        """
+        W4 diurnal pattern. Only registered when WORKLOAD == W4-mixed so that
+        W1/W2/W3 runs use plain --run-time / --users without shape interference.
 
-    Phase        Duration  Users
-    ramp-up      5 min     0 → target
-    plateau      10 min    target
-    burst        1 min     target × 2
-    settle       4 min     target
-    ramp-down    5 min     target → 0
-    Total:       25 min
-    """
+        Phase        Duration  Users
+        ramp-up      5 min     0 → target
+        plateau      10 min    target
+        burst        1 min     target × 2
+        settle       4 min     target
+        ramp-down    5 min     target → 0
+        Total:       25 min
+        """
 
-    stages = [
-        {"duration":  5 * 60, "users": _DIURNAL_TARGET,     "spawn_rate": max(1, _DIURNAL_TARGET // 30)},
-        {"duration": 15 * 60, "users": _DIURNAL_TARGET,     "spawn_rate": 1},
-        {"duration": 16 * 60, "users": _DIURNAL_TARGET * 2, "spawn_rate": max(1, _DIURNAL_TARGET // 10)},
-        {"duration": 20 * 60, "users": _DIURNAL_TARGET,     "spawn_rate": max(1, _DIURNAL_TARGET // 10)},
-        {"duration": 25 * 60, "users": 0,                   "spawn_rate": max(1, _DIURNAL_TARGET // 30)},
-    ]
+        stages = [
+            {"duration":  5 * 60, "users": _DIURNAL_TARGET,     "spawn_rate": max(1, _DIURNAL_TARGET // 30)},
+            {"duration": 15 * 60, "users": _DIURNAL_TARGET,     "spawn_rate": 1},
+            {"duration": 16 * 60, "users": _DIURNAL_TARGET * 2, "spawn_rate": max(1, _DIURNAL_TARGET // 10)},
+            {"duration": 20 * 60, "users": _DIURNAL_TARGET,     "spawn_rate": max(1, _DIURNAL_TARGET // 10)},
+            {"duration": 25 * 60, "users": 0,                   "spawn_rate": max(1, _DIURNAL_TARGET // 30)},
+        ]
 
-    def tick(self):
-        if WORKLOAD != "W4-mixed":
-            return None  # shape inactive for other workloads
-        run_time = self.get_run_time()
-        for stage in self.stages:
-            if run_time < stage["duration"]:
-                return stage["users"], stage["spawn_rate"]
-        return None  # test done
+        def tick(self):
+            run_time = self.get_run_time()
+            for stage in self.stages:
+                if run_time < stage["duration"]:
+                    return stage["users"], stage["spawn_rate"]
+            return None  # test done
 
 
 # ── metadata event hook ────────────────────────────────────────────────────────

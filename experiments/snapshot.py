@@ -135,19 +135,46 @@ def collect_docker_stats(project_name: str, out_path: Path) -> None:
         out_path.write_text(f"# Error: {exc}\n")
 
 
+def write_metadata(
+    run_dir: Path,
+    run_id: str,
+    experiment: str,
+    scenario: str,
+    workload: str,
+    intensity: str,
+    iac_sha: str,
+) -> None:
+    """Write (or overwrite) metadata.yaml so notebooks can discover this run."""
+    meta = {
+        "run_id":     run_id,
+        "experiment": experiment,
+        "scenario":   scenario,
+        "workload":   workload,
+        "intensity":  intensity,
+        "iac_sha":    iac_sha,
+    }
+    (run_dir / "metadata.yaml").write_text(yaml.dump(meta, default_flow_style=False))
+
+
 def run(
     run_id: str,
     start: float,
     end: float,
+    experiment: str,
     scenario: str,
+    workload: str,
+    intensity: str,
     project_name: str,
     prom_url: str,
+    iac_sha: str,
 ) -> Path:
     run_dir = RESULTS_DIR / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
 
     print(f"\n[snapshot] collecting evidence for run {run_id}")
     print(f"  scenario={scenario}  window={end - start:.0f}s")
+
+    write_metadata(run_dir, run_id, experiment, scenario, workload, intensity, iac_sha)
 
     collect_prom_snapshot(prom_url, start, end, run_dir / "prom_snapshot.json")
     collect_gc_log(project_name, run_dir / "gc.log")
@@ -163,11 +190,19 @@ def main() -> None:
     parser.add_argument("--run-id",       required=True)
     parser.add_argument("--start",        required=True, type=float, help="Unix timestamp")
     parser.add_argument("--end",          required=True, type=float, help="Unix timestamp")
+    parser.add_argument("--experiment",   required=True, help="Experiment key, e.g. E1-jvm-heap")
     parser.add_argument("--scenario",     required=True)
+    parser.add_argument("--workload",     required=True)
+    parser.add_argument("--intensity",    required=True)
+    parser.add_argument("--iac-sha",      default="unknown")
     parser.add_argument("--project-name", required=True)
     parser.add_argument("--prom-url",     default="http://localhost:9092")
     args = parser.parse_args()
-    run(args.run_id, args.start, args.end, args.scenario, args.project_name, args.prom_url)
+    run(
+        args.run_id, args.start, args.end,
+        args.experiment, args.scenario, args.workload, args.intensity,
+        args.project_name, args.prom_url, args.iac_sha,
+    )
 
 
 if __name__ == "__main__":

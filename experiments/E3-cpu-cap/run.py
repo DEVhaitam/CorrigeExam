@@ -116,12 +116,16 @@ def _run_cell(
         subprocess.run(
             [
                 sys.executable, str(SNAPSHOT_PY),
-                "--run-id", run_id,
-                "--start", str(start_ts),
-                "--end", str(end_ts),
-                "--scenario", scenario,
+                "--run-id",     run_id,
+                "--start",      str(start_ts),
+                "--end",        str(end_ts),
+                "--experiment", EXPERIMENT_KEY,
+                "--scenario",   scenario,
+                "--workload",   workload,
+                "--intensity",  intensity,
+                "--iac-sha",    iac_sha,
                 "--project-name", project_name,
-                "--prom-url", PROM_URL,
+                "--prom-url",   PROM_URL,
             ],
             check=False, cwd=REPO_ROOT,
         )
