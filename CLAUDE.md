@@ -2,6 +2,10 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+Research code for evidence-grounded IaC patch generation. PhD context lives in
+`PHD_CONTEXT.md`; potential paper ideas are in `PAPERS.md`. Read those before
+making non-trivial changes.
+
 ## Project Overview
 
 CorrectExam (GradeScope ISTIC) is an exam scanning, alignment, and grading platform for educators. It is a monorepo with two independent sub-projects:
