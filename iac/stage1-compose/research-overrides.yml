@@ -1,0 +1,97 @@
+# research-overrides.yml
+#
+# Additive layer over the upstream docker-compose.yml. Run with:
+#   docker compose \
+#     --env-file iac/stage1-compose/scenarios/<scenario>.env \
+#     -f docker-compose.yml \
+#     -f iac/stage1-compose/research-overrides.yml \
+#     up -d
+#
+# Adds (does not modify):
+#   - JAVA_TOOL_OPTIONS env on `back` so JVM flags are scenario-controllable
+#   - resource limits on `back` so cgroup CPU/mem caps are scenario-controllable
+#   - parameterized MySQL command flags (buffer pool, max_connections)
+#   - QUARKUS_DATASOURCE_JDBC_MAX_SIZE env on `back` (Quarkus DB pool)
+#   - mysqld_exporter so MySQL Prometheus metrics are available
+#   - MINIO_PROMETHEUS_AUTH_TYPE=public so MinIO scrape needs no token
+#   - the prometheus.yml volume mount uses iac/stage1-compose/prometheus.yml
+#     (a research-side scrape config that knows about mysqld_exporter)
+#
+# All variables read from the active .env file. Defaults below match the
+# baseline scenario (S0-baseline.env), so running without an .env still works.
+
+services:
+
+  back:
+    environment:
+      # JAVA_TOOL_OPTIONS is honored by the JVM regardless of entrypoint
+      # script, so we don't depend on run-java.sh wrapping flags. Empty
+      # string = JVM defaults (heap = 25% of cgroup memory limit on Java 11+).
+      JAVA_TOOL_OPTIONS: "${JAVA_TOOL_OPTIONS:-}"
+      # Quarkus DB pool size. Default unset -> Quarkus default (20).
+      QUARKUS_DATASOURCE_JDBC_MAX_SIZE: "${QUARKUS_DB_POOL_MAX:-20}"
+    # Compose v3 deploy.resources is honored by `docker compose up` since v2.x CLI.
+    # `cpus:` and `mem_limit:` (top-level) work too but are deprecated in v3.
+    # Defaults are generous so omitting them in .env doesn't artificially constrain.
+    deploy:
+      resources:
+        limits:
+          cpus: "${BACK_CPUS:-2.0}"
+          memory: "${BACK_MEM:-2g}"
+
+  mysql:
+    # Override the base command to add tunable flags. Keep the upstream flags
+    # intact (lower_case_table_names, skip-ssl, character_set_server,
+    # explicit_defaults_for_timestamp) so the schema still loads correctly.
+    command:
+      - mysqld
+      - --lower_case_table_names=1
+      - --skip-ssl
+      - --character_set_server=utf8mb4
+      - --explicit_defaults_for_timestamp
+      - --innodb_buffer_pool_size=${MYSQL_BUFFER_POOL:-1G}
+      - --max_connections=${MYSQL_MAX_CONNS:-200}
+    deploy:
+      resources:
+        limits:
+          cpus: "${MYSQL_CPUS:-2.0}"
+          memory: "${MYSQL_MEM:-2g}"
+
+  minio:
+    environment:
+      # MinIO 8.0+ requires Prometheus auth by default. `public` opens the
+      # /minio/v2/metrics/cluster endpoint so Prometheus can scrape without
+      # a JWT token. Acceptable for research; in production use proper auth.
+      MINIO_PROMETHEUS_AUTH_TYPE: public
+
+  prometheus:
+    # Replace the default upstream scrape config (which only knows about
+    # the back end) with the research scrape config that includes mysqld,
+    # minio, node-exporter, cadvisor, and carries scenario labels.
+    volumes:
+      - ./iac/stage1-compose/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+
+  mysqld-exporter:
+    image: prom/mysqld-exporter:v0.15.1
+    container_name: correctexam-mysqld-exporter
+    command:
+      - --mysqld.address=mysql:3306
+      - --mysqld.username=root
+      # Collect the metrics paper-1 scenarios depend on:
+      - --collect.global_status
+      - --collect.global_variables
+      - --collect.info_schema.processlist
+      - --collect.info_schema.innodb_metrics
+      - --collect.engine_innodb_status
+    environment:
+      # The exporter reads the password from this env var.
+      MYSQLD_EXPORTER_PASSWORD: rootpassword
+    networks:
+      - correctexam-net
+    ports:
+      - "9104:9104"
+    depends_on:
+      mysql:
+        condition: service_healthy
+    restart: unless-stopped

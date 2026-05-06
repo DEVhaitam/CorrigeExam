@@ -1,0 +1,64 @@
+# prometheus.yml — research scrape config for stage S0/S1
+#
+# Scrape jobs and what they support per EXPERIMENTS.md §3:
+#   quarkus-back  -> S1, S2, S3 (JVM heap/GC), S6 (Quarkus DB pool agroal_*)
+#   mysqld        -> S4 (buffer pool), S5 (max_connections)
+#   minio         -> external-validity for storage scenarios
+#   cadvisor      -> S7 (CPU throttling), S8 (container OOM/restart)
+#   node          -> S9 (per-core saturation) — UNRELIABLE on macOS Docker
+#                    Desktop; treat as informational on laptop.
+#
+# `external_labels` are injected into every series so each Prometheus DB
+# carries the deployment context. Per-run labels (experiment_id, scenario,
+# iac_sha, workload, intensity) come from the application via Micrometer
+# tags or are set in scenario .env files via PROM_EXTERNAL_*.
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    deployment: "correctexam-s0"
+    # These are filled in by the runner via PROM_EXTERNAL_* env vars passed
+    # to docker compose. If unset they read as empty strings, which is fine.
+    scenario: "${PROM_EXTERNAL_SCENARIO:-unknown}"
+    workload: "${PROM_EXTERNAL_WORKLOAD:-unknown}"
+
+scrape_configs:
+  - job_name: prometheus
+    static_configs:
+      - targets: ['localhost:9090']
+
+  - job_name: quarkus-back
+    metrics_path: /q/metrics
+    static_configs:
+      - targets: ['back:8080']
+        labels:
+          tier: app
+
+  - job_name: mysqld
+    static_configs:
+      - targets: ['mysqld-exporter:9104']
+        labels:
+          tier: db
+
+  - job_name: minio
+    metrics_path: /minio/v2/metrics/cluster
+    static_configs:
+      - targets: ['minio:9000']
+        labels:
+          tier: storage
+
+  - job_name: cadvisor
+    static_configs:
+      - targets: ['cadvisor:8080']
+        labels:
+          tier: container
+
+  - job_name: node
+    static_configs:
+      - targets: ['node-exporter:9100']
+        labels:
+          tier: host
+          # On macOS Docker Desktop, node-exporter sees the VM not the host.
+          # On Grid'5000 Linux this is a real measurement.
+          reliable: "linux-only"

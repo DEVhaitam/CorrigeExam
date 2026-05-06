@@ -1,0 +1,169 @@
+# experiments/matrix.yaml
+#
+# Experiment matrix for Paper 1 (P1). Each experiment entry maps to a
+# directory under experiments/E<n>-<name>/ containing run.py + analyze.ipynb.
+#
+# run.py reads this file and iterates the (scenarios × workloads × intensities)
+# product, running one "cell" = (scenario, workload, intensity) per deploy cycle.
+#
+# §3 of EXPERIMENTS.md defines each scenario; §2 defines workload parameters.
+
+experiments:
+
+  E1-jvm-heap:
+    description: "JVM heap perturbation under upload workload (L1)"
+    layer: L1
+    paper: P1
+    scenarios:
+      - S0-baseline
+      - S1-heap-256m
+    workloads:
+      - W2-upload
+    intensities:
+      - low
+      - medium
+      - high
+    notes: >
+      Headline for L1. Diagnostic signal: GC pause rate >1/s AND heap ratio >0.9.
+      S1 vs S0 at medium intensity is the minimal demo for paper figures.
+
+  E2-mysql-buffer:
+    description: "MySQL InnoDB buffer pool perturbation under grade workload (L3)"
+    layer: L3
+    paper: P1
+    scenarios:
+      - S0-baseline
+      - S4-mysql-buffer-128m
+    workloads:
+      - W3-grade
+    intensities:
+      - low
+      - medium
+      - high
+    notes: >
+      Diagnostic signal: buffer pool cache miss rate >5%.
+      Pair with E2b-mysql-pool for the cross-layer trap figure.
+
+  E2b-cross-layer-trap:
+    description: "S5 vs S6 cross-layer trap demo (same symptom, different layer fix)"
+    layer: L3
+    paper: P1
+    scenarios:
+      - S0-baseline
+      - S5-mysql-conns-30
+      - S6-quarkus-pool-5
+    workloads:
+      - W3-grade
+    intensities:
+      - medium
+      - high
+    notes: >
+      THE key figure for paper 1. S5 and S6 produce the same user-facing symptom
+      (slow queries, high p95) but require fixes at different layers.
+      S5 fix = DB config; S6 fix = app config. Demonstrating that diagnostic
+      signals disambiguate this is the paper's core empirical contribution.
+
+  E3-cpu-cap:
+    description: "cgroup CPU cap perturbation under mixed workload (L4, headline)"
+    layer: L4
+    paper: P1
+    scenarios:
+      - S0-baseline
+      - S7-cpu-cap-half
+    workloads:
+      - W4-mixed
+    intensities:
+      - low
+      - medium
+      - high
+    notes: >
+      Headline L4 scenario. Diagnostic signal: cAdvisor CPU throttling rate >0.5/s.
+      Directly comparable to CherryPick-style baselines (B1 from PAPERS.md).
+      cAdvisor reads cgroups inside Docker Desktop VM — signal is reliable on macOS.
+
+  E4-mem-cap:
+    description: "cgroup memory cap causing OOM restarts (L4)"
+    layer: L4
+    paper: P1
+    scenarios:
+      - S0-baseline
+      - S8-mem-cap-512m
+    workloads:
+      - W2-upload
+    intensities:
+      - medium
+    notes: >
+      Diagnostic signal: container_memory_failcnt > 0 OR restart count rising.
+      Distinguished from S1 (JVM heap) by GC metrics remaining healthy at kill.
+
+
+# ── workload user counts per intensity ───────────────────────────────────────
+intensity_users:
+  W1-browse:
+    low:    5
+    medium: 20
+    high:   50
+  W2-upload:
+    low:    3
+    medium: 10
+    high:   25
+  W3-grade:
+    low:    5
+    medium: 20
+    high:   50
+  W4-mixed:
+    low:    10
+    medium: 30
+    high:   60
+
+
+# ── run lifecycle (seconds) ──────────────────────────────────────────────────
+run_lifecycle:
+  warmup_seconds:   30
+  steady_seconds:   300   # 5 min measurement window
+  cooldown_seconds: 15    # after locust stops, before snapshot
+  # W4 diurnal overrides steady_seconds (shape controls duration ~25 min).
+  w4_run_seconds: 1560    # 26 min (shape ends at 25 min, 1 min buffer)
+
+
+# ── Prometheus snapshot metrics ──────────────────────────────────────────────
+# These are fetched by snapshot.py for every run. Add metrics here as new
+# scenarios are introduced.
+snapshot_metrics:
+
+  # L1 — JVM heap / GC
+  - jvm_gc_pause_seconds_count
+  - jvm_gc_pause_seconds_sum
+  - "jvm_memory_used_bytes{area='heap'}"
+  - "jvm_memory_max_bytes{area='heap'}"
+  - jvm_gc_live_data_size_bytes
+  - jvm_gc_max_data_size_bytes
+
+  # L3 — MySQL InnoDB
+  - mysql_global_status_innodb_buffer_pool_reads
+  - mysql_global_status_innodb_buffer_pool_read_requests
+  - mysql_global_status_threads_connected
+  - mysql_global_variables_max_connections
+  - mysql_global_status_aborted_connects
+  - mysql_global_status_threads_running
+  - mysql_global_status_slow_queries
+
+  # L3 — Quarkus DB pool (Agroal)
+  - agroal_active_count
+  - agroal_awaiting_count
+  - agroal_max_used_count
+  - agroal_acquire_count_total
+  - agroal_timeout_count_total
+
+  # L4 — cgroup (cAdvisor)
+  - "container_cpu_cfs_throttled_seconds_total{name='correctexam-back'}"
+  - "container_cpu_cfs_periods_total{name='correctexam-back'}"
+  - "container_memory_usage_bytes{name='correctexam-back'}"
+  - "container_memory_failcnt{name='correctexam-back'}"
+  - "container_restarts{name='correctexam-back'}"
+
+  # App HTTP (Quarkus Micrometer)
+  - http_server_requests_seconds_count
+  - http_server_requests_seconds_sum
+  - "http_server_requests_seconds_max{method='POST'}"
+  - "http_server_requests_seconds_max{method='GET'}"
