@@ -202,13 +202,14 @@ class UploadUser(HttpUser):
     wait_time = between(2, 5)
 
     _token: str = ""
+    _scan_id: int = None
     _exam_id: int = None
 
     def on_start(self):
         from workload.locust.auth import get_token
         self._token = get_token(self.client)
         self.client.headers["Authorization"] = f"Bearer {self._token}"
-        self._create_exam()
+        self._setup_upload_context()
 
     def _reauth_if_needed(self, resp) -> bool:
         if resp.status_code == 401:
@@ -218,51 +219,71 @@ class UploadUser(HttpUser):
             return True
         return False
 
-    def _create_exam(self):
-        """Create a throwaway exam to upload scans into."""
-        payload = {
-            "name": f"locust-exam-{uuid.uuid4().hex[:8]}",
-            "nbQuestions": 5,
-            "scanType": "SCAN",
-        }
-        with self.client.post("/api/exams", json=payload, name="POST /api/exams (setup)",
-                              catch_response=True) as r:
-            if r.status_code in (200, 201):
-                self._exam_id = r.json().get("id")
-                r.success()
-            else:
-                r.failure(f"Exam creation failed {r.status_code}")
+    def _setup_upload_context(self):
+        """Build the ownership chain required by canAccess on uploadScan.
+
+        CourseResource.createCourse auto-adds the creator to course.profs.
+        Scan.canAccess checks: exam.scanfile == scan AND course.profs contains user.
+        So we need: course (user as prof) → exam (courseId + scanfileId) → scan.
+        The scan_id is reused across upload_pdf calls (overwrite is fine for load).
+        """
+        uid = uuid.uuid4().hex[:8]
+
+        # 1. Course — creator is auto-added as prof by CourseResource.createCourse
+        with self.client.post(
+            "/api/courses",
+            json={"name": f"locust-course-{uid}"},
+            name="POST /api/courses (setup)",
+            catch_response=True,
+        ) as r:
+            if r.status_code not in (200, 201):
+                r.failure(f"Course create failed {r.status_code}: {r.text[:200]}")
+                return
+            course_id = r.json().get("id")
+            r.success()
+
+        # 2. Scan entity — placeholder; content uploaded via uploadScan
+        with self.client.post(
+            SCAN_CREATE_PATH,
+            json={"name": f"locust-scan-{uid}"},
+            name=f"POST {SCAN_CREATE_PATH} (setup)",
+            catch_response=True,
+        ) as r:
+            if r.status_code not in (200, 201):
+                r.failure(f"Scan create failed {r.status_code}: {r.text[:200]}")
+                return
+            self._scan_id = r.json().get("id")
+            r.success()
+
+        # 3. Exam — links course (prof chain) and scanfile (ownership check)
+        with self.client.post(
+            "/api/exams",
+            json={
+                "name":       f"locust-exam-{uid}",
+                "courseId":   course_id,
+                "scanfileId": self._scan_id,
+            },
+            name="POST /api/exams (setup)",
+            catch_response=True,
+        ) as r:
+            if r.status_code not in (200, 201):
+                r.failure(f"Exam create failed {r.status_code}: {r.text[:200]}")
+                return
+            self._exam_id = r.json().get("id")
+            r.success()
 
     @task(6)
     @tag("upload", "mixed")
     def upload_pdf(self):
-        if not self._exam_id:
-            self._create_exam()
+        if not self._scan_id:
+            self._setup_upload_context()
             return
-        # Step 1: create a Scan entity → get its id
-        # POST /api/scans accepts JSON {name} and returns ScanDTO {id, name}
-        scan_name = f"locust-scan-{uuid.uuid4().hex[:8]}"
-        with self.client.post(
-            SCAN_CREATE_PATH,
-            json={"name": scan_name},
-            name=f"POST {SCAN_CREATE_PATH} (create)",
-            catch_response=True,
-        ) as r:
-            if self._reauth_if_needed(r):
-                return
-            if r.status_code not in (200, 201):
-                r.failure(f"Scan create failed {r.status_code}: {r.text[:200]}")
-                return
-            scan_id = r.json().get("id")
-            r.success()
-        if not scan_id:
-            return
-        # Step 2: upload PDF bytes as multipart to /api/uploadScan/{scanId}
-        # ScanService.uploadFile reads multipart field named "file"
+        # POST /api/uploadScan/{scanId} — multipart field "file"
+        # canAccess passes because scan is exam.scanfile and user is course.prof
         pdf_bytes = _pick_pdf()
         headers = {"Authorization": f"Bearer {self._token}"}
         with self.client.post(
-            f"{SCAN_UPLOAD_PATH}/{scan_id}",
+            f"{SCAN_UPLOAD_PATH}/{self._scan_id}",
             files={"file": ("scan.pdf", pdf_bytes, "application/pdf")},
             headers=headers,
             name=f"POST {SCAN_UPLOAD_PATH}/{{scanId}}",
