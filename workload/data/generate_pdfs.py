@@ -16,8 +16,6 @@ Usage:
 """
 
 import argparse
-import struct
-import zlib
 from pathlib import Path
 
 OUTPUT_DIR = Path(__file__).parent / "synthetic-exams"
@@ -49,14 +47,6 @@ def _make_pdf(target_bytes: int) -> bytes:
     # a large uncompressed blob to produce a decently-sized file.
     # Strategy: produce uncompressed content proportional to target size,
     # then compress and check. For simplicity just fill with varied bytes.
-
-    # Generate uncompressed stream content (varied bytes so compression ratio
-    # stays manageable — we want the *file* to be near target_bytes).
-    # Use repeating structured bytes to get a ~50% compression ratio.
-    chunk = bytes(range(256)) * 16  # 4096 bytes, moderate compressibility
-    repeats = max(1, (target_bytes * 2) // len(chunk))
-    raw_stream = (chunk * repeats)[:target_bytes * 2]
-    compressed = zlib.compress(raw_stream, level=6)
 
     # Build the PDF objects
     objects = []
@@ -94,12 +84,19 @@ def _make_pdf(target_bytes: int) -> bytes:
         b"endobj\n"
     )
 
-    # Object 6: Padding stream (bulk of the file)
+    # Object 6: Uncompressed padding stream — file size on disk equals target_bytes.
+    # The upload path (ScanService.uploadFile) streams bytes to MinIO without
+    # PDFBox parsing, so JVM heap stress scales with the raw multipart payload size.
+    # Using uncompressed stream so the on-disk PDF size matches target_bytes exactly.
+    header_overhead = sum(len(o) for o in objects) + 500  # rough xref+trailer estimate
+    padding_size = max(0, target_bytes - header_overhead)
+    # Repeating 0xFF bytes: still a valid uncompressed PDF stream
+    raw_padding = b"\xff" * padding_size
     objects.append(
         b"6 0 obj\n"
-        + f"<< /Length {len(compressed)} /Filter /FlateDecode >>\n".encode()
+        + f"<< /Length {len(raw_padding)} >>\n".encode()
         + b"stream\n"
-        + compressed
+        + raw_padding
         + b"\nendstream\nendobj\n"
     )
 

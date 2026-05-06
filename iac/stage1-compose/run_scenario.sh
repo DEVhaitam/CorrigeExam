@@ -47,7 +47,7 @@ COMPOSE_CMD=(
   --env-file "$ENV_FILE"
   -f "$COMPOSE_BASE"
   -f "$COMPOSE_OVERRIDE"
-  --project-name "correctexam-${SCENARIO}"
+  --project-name "correctexam-$(echo "${SCENARIO}" | tr '[:upper:]' '[:lower:]')"
 )
 
 case "$ACTION" in

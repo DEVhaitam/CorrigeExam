@@ -29,7 +29,8 @@ Mandatory env vars (every run must set these — missing labels = broken joins):
   INTENSITY       low | medium | high
 
 Adjustable endpoint constants (override via env if CorrectExam paths differ):
-  EXAM_SHEET_UPLOAD_PATH   default /api/scans (multipart PDF upload)
+  SCAN_CREATE_PATH         default /api/scans (JSON, creates Scan entity → returns id)
+  SCAN_UPLOAD_PATH         default /api/uploadScan (POST /{id} multipart field "file")
   GRADE_PATH_PREFIX        default /api/student-responses
   EXAM_SHEET_LIST_PATH     default /api/exam-sheets
   QUESTION_LIST_PATH       default /api/questions
@@ -51,9 +52,8 @@ WORKLOAD      = os.getenv("WORKLOAD", "W1-browse")
 INTENSITY     = os.getenv("INTENSITY", "unknown")
 
 # ── adjustable endpoint constants ─────────────────────────────────────────────
-# Verify these against the actual CorrectExam controllers before first run.
-# ExtendedAPI.java may expose different paths than the standard JHipster CRUD.
-EXAM_SHEET_UPLOAD_PATH = os.getenv("EXAM_SHEET_UPLOAD_PATH", "/api/scans")
+SCAN_CREATE_PATH       = os.getenv("SCAN_CREATE_PATH", "/api/scans")
+SCAN_UPLOAD_PATH       = os.getenv("SCAN_UPLOAD_PATH", "/api/uploadScan")
 GRADE_PATH_PREFIX      = os.getenv("GRADE_PATH_PREFIX", "/api/student-responses")
 EXAM_SHEET_LIST_PATH   = os.getenv("EXAM_SHEET_LIST_PATH", "/api/exam-sheets")
 QUESTION_LIST_PATH     = os.getenv("QUESTION_LIST_PATH", "/api/questions")
@@ -239,23 +239,38 @@ class UploadUser(HttpUser):
         if not self._exam_id:
             self._create_exam()
             return
-        pdf_bytes = _pick_pdf()
-        files = {"file": ("scan.pdf", pdf_bytes, "application/pdf")}
-        data  = {"examId": str(self._exam_id)}
-        # Strip the Authorization header from the default headers for multipart
-        # (some versions of requests encode it wrong with files= kwarg).
-        headers = {"Authorization": f"Bearer {self._token}"}
+        # Step 1: create a Scan entity → get its id
+        # POST /api/scans accepts JSON {name} and returns ScanDTO {id, name}
+        scan_name = f"locust-scan-{uuid.uuid4().hex[:8]}"
         with self.client.post(
-            EXAM_SHEET_UPLOAD_PATH,
-            files=files,
-            data=data,
-            headers=headers,
-            name=f"POST {EXAM_SHEET_UPLOAD_PATH} (multipart)",
+            SCAN_CREATE_PATH,
+            json={"name": scan_name},
+            name=f"POST {SCAN_CREATE_PATH} (create)",
             catch_response=True,
         ) as r:
             if self._reauth_if_needed(r):
                 return
-            if r.status_code in (200, 201, 202):
+            if r.status_code not in (200, 201):
+                r.failure(f"Scan create failed {r.status_code}: {r.text[:200]}")
+                return
+            scan_id = r.json().get("id")
+            r.success()
+        if not scan_id:
+            return
+        # Step 2: upload PDF bytes as multipart to /api/uploadScan/{scanId}
+        # ScanService.uploadFile reads multipart field named "file"
+        pdf_bytes = _pick_pdf()
+        headers = {"Authorization": f"Bearer {self._token}"}
+        with self.client.post(
+            f"{SCAN_UPLOAD_PATH}/{scan_id}",
+            files={"file": ("scan.pdf", pdf_bytes, "application/pdf")},
+            headers=headers,
+            name=f"POST {SCAN_UPLOAD_PATH}/{{scanId}}",
+            catch_response=True,
+        ) as r:
+            if self._reauth_if_needed(r):
+                return
+            if r.status_code in (200, 201, 202, 204):
                 r.success()
             else:
                 r.failure(f"Upload failed {r.status_code}: {r.text[:200]}")
