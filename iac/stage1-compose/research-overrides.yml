@@ -27,9 +27,15 @@ services:
       # JAVA_TOOL_OPTIONS is honored by the JVM regardless of entrypoint
       # script, so we don't depend on run-java.sh wrapping flags. Empty
       # string = JVM defaults (heap = 25% of cgroup memory limit on Java 11+).
-      JAVA_TOOL_OPTIONS: "${JAVA_TOOL_OPTIONS:-}"
+      # The JMX Prometheus agent is appended here so it always runs alongside
+      # whatever heap/GC flags the scenario sets.
+      JAVA_TOOL_OPTIONS: "${JAVA_TOOL_OPTIONS:-} -javaagent:/jmx/jmx_prometheus_javaagent.jar=9404:/jmx/jvm-config.yaml"
       # Quarkus DB pool size. Default unset -> Quarkus default (20).
       QUARKUS_DATASOURCE_JDBC_MAX_SIZE: "${QUARKUS_DB_POOL_MAX:-20}"
+    volumes:
+      - ./iac/stage1-compose/jmx:/jmx:ro
+    ports:
+      - "9404:9404"
     # Compose v3 deploy.resources is honored by `docker compose up` since v2.x CLI.
     # `cpus:` and `mem_limit:` (top-level) work too but are deprecated in v3.
     # Defaults are generous so omitting them in .env doesn't artificially constrain.

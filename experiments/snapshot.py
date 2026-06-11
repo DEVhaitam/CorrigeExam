@@ -82,7 +82,9 @@ def collect_prom_snapshot(
 
 def collect_gc_log(project_name: str, out_path: Path) -> None:
     """Fetch /tmp/gc.log from the back container (written when -Xlog:gc* is set)."""
-    container = f"{project_name}-back-1"
+    # docker-compose.yml hardcodes container_name: correctexam-back; the project
+    # name does NOT appear in the container name despite the compose project prefix.
+    container = "correctexam-back"
     cmd = ["docker", "exec", container, "cat", "/tmp/gc.log"]
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
@@ -100,7 +102,7 @@ def collect_gc_log(project_name: str, out_path: Path) -> None:
 
 def collect_mysql_status(project_name: str, out_path: Path) -> None:
     """Run SHOW ENGINE INNODB STATUS inside the mysql container."""
-    container = f"{project_name}-mysql-1"
+    container = "correctexam-mysql"
     cmd = [
         "docker", "exec", container,
         "mysql", "-u", "root", "-prootpassword",
@@ -124,10 +126,10 @@ def collect_docker_stats(project_name: str, out_path: Path) -> None:
     ]
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-        # Filter to this project's containers
+        # Filter to this project's containers (all start with "correctexam-")
         lines = [
             l for l in result.stdout.splitlines()
-            if project_name in l or l.startswith("NAME")
+            if l.startswith("correctexam-") or l.startswith("NAME")
         ]
         out_path.write_text("\n".join(lines) + "\n")
         print(f"  [stats] wrote {out_path.name}")

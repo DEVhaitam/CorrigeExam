@@ -79,7 +79,7 @@ def _run_cell(
     dry_run: bool,
 ) -> None:
     run_id       = str(uuid.uuid4())
-    project_name = f"correctexam-{scenario}"
+    project_name = f"correctexam-{scenario.lower()}"
     run_dir      = RESULTS_DIR / run_id
     iac_sha      = subprocess.check_output(
         ["git", "rev-parse", "--short", "HEAD"], cwd=REPO_ROOT, text=True

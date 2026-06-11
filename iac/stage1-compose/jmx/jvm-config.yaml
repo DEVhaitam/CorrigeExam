@@ -1,0 +1,75 @@
+---
+# jmx_prometheus_javaagent config — JVM metrics for research experiments.
+# Exposes GC, heap, threads, class loading, and compilation metrics.
+# Mounted into the back container at /jmx/jvm-config.yaml.
+
+lowercaseOutputLabelNames: true
+lowercaseOutputName: true
+whitelistObjectNames:
+  - "java.lang:type=GarbageCollector,*"
+  - "java.lang:type=Memory"
+  - "java.lang:type=MemoryPool,*"
+  - "java.lang:type=Threading"
+  - "java.lang:type=ClassLoading"
+  - "java.lang:type=Compilation"
+  - "java.lang:type=Runtime"
+
+rules:
+  # GC collections and time
+  - pattern: 'java.lang<type=GarbageCollector, name=(.*)><>CollectionCount'
+    name: jvm_gc_collection_total
+    labels:
+      gc: "$1"
+    type: COUNTER
+
+  - pattern: 'java.lang<type=GarbageCollector, name=(.*)><>CollectionTime'
+    name: jvm_gc_collection_seconds_total
+    labels:
+      gc: "$1"
+    type: COUNTER
+    valueFactor: 0.001
+
+  # Heap memory
+  - pattern: 'java.lang<type=Memory><HeapMemoryUsage>used'
+    name: jvm_heap_used_bytes
+    type: GAUGE
+
+  - pattern: 'java.lang<type=Memory><HeapMemoryUsage>committed'
+    name: jvm_heap_committed_bytes
+    type: GAUGE
+
+  - pattern: 'java.lang<type=Memory><HeapMemoryUsage>max'
+    name: jvm_heap_max_bytes
+    type: GAUGE
+
+  # Non-heap (Metaspace)
+  - pattern: 'java.lang<type=Memory><NonHeapMemoryUsage>used'
+    name: jvm_nonheap_used_bytes
+    type: GAUGE
+
+  # Memory pools
+  - pattern: 'java.lang<type=MemoryPool, name=(.*)><Usage>used'
+    name: jvm_memory_pool_used_bytes
+    labels:
+      pool: "$1"
+    type: GAUGE
+
+  # Threads
+  - pattern: 'java.lang<type=Threading><>ThreadCount'
+    name: jvm_threads_current
+    type: GAUGE
+
+  - pattern: 'java.lang<type=Threading><>DaemonThreadCount'
+    name: jvm_threads_daemon
+    type: GAUGE
+
+  # Class loading
+  - pattern: 'java.lang<type=ClassLoading><>LoadedClassCount'
+    name: jvm_classes_loaded
+    type: GAUGE
+
+  # JVM uptime
+  - pattern: 'java.lang<type=Runtime><>Uptime'
+    name: jvm_uptime_seconds
+    type: GAUGE
+    valueFactor: 0.001

@@ -131,13 +131,14 @@ run_lifecycle:
 # scenarios are introduced.
 snapshot_metrics:
 
-  # L1 — JVM heap / GC
-  - jvm_gc_pause_seconds_count
-  - jvm_gc_pause_seconds_sum
-  - "jvm_memory_used_bytes{area='heap'}"
-  - "jvm_memory_max_bytes{area='heap'}"
-  - jvm_gc_live_data_size_bytes
-  - jvm_gc_max_data_size_bytes
+  # L1 — JVM heap / GC (via JMX exporter agent at back:9404)
+  - jvm_gc_collection_seconds_count
+  - jvm_gc_collection_seconds_sum
+  - "jvm_memory_bytes_used{area='heap'}"
+  - "jvm_memory_bytes_max{area='heap'}"
+  - "jvm_memory_bytes_committed{area='heap'}"
+  - jvm_threads_current
+  - jvm_classes_currently_loaded
 
   # L3 — MySQL InnoDB
   - mysql_global_status_innodb_buffer_pool_reads

@@ -29,9 +29,15 @@ scrape_configs:
       - targets: ['localhost:9090']
 
   - job_name: quarkus-back
-    metrics_path: /q/metrics
+    metrics_path: /management/prometheus
     static_configs:
       - targets: ['back:8080']
+        labels:
+          tier: app
+
+  - job_name: jvm-jmx
+    static_configs:
+      - targets: ['back:9404']
         labels:
           tier: app
 
