@@ -162,9 +162,16 @@
         state: present
 
     # ── 4. Clone / update the repo into NFS home ───────────────────────────
+    # The NFS home is owned by {{ g5k_username }} but Ansible runs as root.
+    # Git ≥ 2.35.2 refuses to operate on directories owned by a different user
+    # unless they're listed in safe.directory. Using '*' is the standard CI fix.
     # repo_root = /home/{{ g5k_username }}/CorrigeExam (NFS-mounted, shared
     # across all nodes at the site — no re-clone needed on subsequent reservations).
     # Shell task handles all three states: missing dir, broken dir, valid repo.
+    - name: Trust NFS home in git (safe.directory — root vs haelhayan ownership)
+      shell: git config --global --add safe.directory '*'
+      changed_when: false
+
     - name: Clone or update CorrectExam repo in NFS home (with submodules)
       shell: |
         if [ -d "{{ repo_root }}/.git" ]; then
