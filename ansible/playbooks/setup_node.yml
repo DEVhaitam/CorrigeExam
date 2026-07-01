@@ -120,10 +120,10 @@
         enabled: true
         state: started
 
-    - name: Add G5K user to docker group (allows docker commands without sudo)
+    - name: Add G5K user to docker and libvirt groups (allows commands without sudo)
       user:
         name: "{{ g5k_username }}"
-        groups: docker
+        groups: docker,libvirt
         append: true
 
     - name: Enable and start libvirtd
@@ -132,10 +132,33 @@
         enabled: true
         state: started
 
+    - name: Configure QEMU to run as root (avoids image permission errors on Debian)
+      lineinfile:
+        path: /etc/libvirt/qemu.conf
+        regexp: "{{ item.regexp }}"
+        line: "{{ item.line }}"
+      loop:
+        - { regexp: '^#?user\s*=', line: 'user = "root"' }
+        - { regexp: '^#?group\s*=', line: 'group = "root"' }
+      notify: Restart libvirtd
+
+    - name: Flush handlers (restart libvirtd now if qemu.conf changed)
+      meta: flush_handlers
+
     - name: Start libvirt default network (creates virbr0 at 192.168.122.1)
       shell: |
         virsh net-info default 2>/dev/null | grep -q "Active:.*yes" || virsh net-start default
         virsh net-autostart default
+      changed_when: false
+
+    - name: Create and start libvirt default storage pool
+      shell: |
+        if ! virsh pool-info default &>/dev/null; then
+          virsh pool-define-as default dir --target /var/lib/libvirt/images/
+          virsh pool-build default
+        fi
+        virsh pool-info default | grep -q "State:.*running" || virsh pool-start default
+        virsh pool-autostart default
       changed_when: false
 
     # ── 2. Terraform ────────────────────────────────────────────────────────
@@ -351,4 +374,9 @@
     - name: Restart Docker
       systemd:
         name: docker
+        state: restarted
+
+    - name: Restart libvirtd
+      systemd:
+        name: libvirtd
         state: restarted
