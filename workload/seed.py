@@ -23,11 +23,11 @@ import requests
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("seed")
 
-TESTDATA_DIR = Path(__file__).parent.parent / "testData"
-FILES = {
-    "357": TESTDATA_DIR / "357.json",   # ~85 MB  — small, use for quick seed
-    "136": TESTDATA_DIR / "136.json",   # ~134 MB — medium
-    "265": TESTDATA_DIR / "265.json",   # ~1 GB   — large, avoid on low RAM
+DEFAULT_TESTDATA_DIR = Path(__file__).parent.parent / "testData"
+FILE_NAMES = {
+    "357": "357.json",   # ~85 MB  — small, use for quick seed
+    "136": "136.json",   # ~134 MB — medium
+    "265": "265.json",   # ~1 GB   — large, avoid on low RAM
 }
 
 
@@ -69,19 +69,26 @@ def main():
     parser.add_argument("--user", default="admin")
     parser.add_argument("--pass", dest="password", default="admin")
     parser.add_argument(
+        "--datadir",
+        default=None,
+        help="Directory containing testData JSON files (default: testData/ relative to repo root)",
+    )
+    parser.add_argument(
         "--files",
         nargs="+",
-        choices=list(FILES.keys()),
+        choices=list(FILE_NAMES.keys()),
         default=["357"],
         help="Which testData files to import (default: 357 only — 85 MB, fastest seed)",
     )
     args = parser.parse_args()
 
+    datadir = Path(args.datadir) if args.datadir else DEFAULT_TESTDATA_DIR
+
     token = authenticate(args.host, args.user, args.password)
 
     results = []
     for key in args.files:
-        path = FILES[key]
+        path = datadir / FILE_NAMES[key]
         if not path.exists():
             log.error("File not found: %s", path)
             results.append({"file": path.name, "status": "missing"})

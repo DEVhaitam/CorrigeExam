@@ -119,8 +119,10 @@
           - requests
         state: present
 
-    # ── 4. Clone / update the repo ──────────────────────────────────────────
-    - name: Clone CorrectExam repo
+    # ── 4. Clone / update the repo into NFS home ───────────────────────────
+    # repo_root = /home/{{ g5k_username }}/CorrigeExam (NFS-mounted, shared
+    # across all nodes at the site — no re-clone needed on subsequent reservations).
+    - name: Clone or update CorrectExam repo in NFS home
       git:
         repo:    "{{ repo_url }}"
         dest:    "{{ repo_root }}"
@@ -133,7 +135,24 @@
       debug:
         msg: "Repo {{ 'updated' if git_result.changed else 'already up-to-date' }} at {{ repo_root }}"
 
-    # ── 5. Local Docker registry ────────────────────────────────────────────
+    # ── 5. Verify testdata_dir ──────────────────────────────────────────────
+    # testData lives in NFS home — never in git (files are 81 MB – 1 GB).
+    # If missing, the user needs to copy them once:
+    #   scp testData/*.json access.grid5000.fr:~/testData/
+    - name: Check testdata_dir exists
+      stat:
+        path: "{{ testdata_dir }}/357.json"
+      register: testdata_check
+
+    - name: Warn if testdata_dir is missing
+      debug:
+        msg: >
+          WARNING: {{ testdata_dir }}/357.json not found.
+          Seeding will fail. Copy test data to the Grid5000 frontend first:
+            scp testData/*.json access.grid5000.fr:~/testData/
+      when: not testdata_check.stat.exists
+
+    # ── 6. Local Docker registry ───────────────────────────────────────────
     - name: Start local Docker registry on port 5000
       community.docker.docker_container:
         name:          registry
@@ -194,7 +213,7 @@
       when: rebuild_images | bool or frontend_exists.status == 404
       shell: docker push {{ local_registry }}/correctexam-front:{{ image_tag }}
 
-    # ── 7. Terraform init ───────────────────────────────────────────────────
+    # ── 8. Terraform init ───────────────────────────────────────────────────
     - name: Terraform init (download libvirt provider)
       shell: terraform init -input=false
       args:
@@ -202,7 +221,7 @@
       register: tf_init
       changed_when: "'Terraform has been successfully initialized' in tf_init.stdout"
 
-    # ── 8. Monitoring stack ─────────────────────────────────────────────────
+    # ── 9. Monitoring stack ─────────────────────────────────────────────────
     - name: Create empty Prometheus target files
       copy:
         content: "[]"

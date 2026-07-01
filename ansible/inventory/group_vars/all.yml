@@ -13,7 +13,7 @@ repo_branch:  iac-experiments
 
 # Test data — large JSON exports (81 MB – 1 GB) stored in NFS home, never in git.
 # Copy once from your laptop:
-#   scp testData/*.json access.grid5000.fr:~/testData/
+#   scp testData/*.json rennes.g5k:~/testData/
 testdata_dir: "/home/helhayan/testData"
 
 # Terraform

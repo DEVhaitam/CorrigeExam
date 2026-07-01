@@ -1,13 +1,12 @@
 ---
 # seed_db.yml — Seed the DB on an experiment VM.
 #
-# Replaces grid5000/scripts/seed_vm.sh.
-# Runs seed.py three times to populate the DB with:
-#   3 courses, 3 exams, ~51 exam sheets, ~765 student responses
-# This is the fixed dataset used by all experiments (S01–S04 scenarios).
+# Runs seed.py directly on the bare-metal node. seed.py reads testData from
+# the NFS home dir (testdata_dir) and POSTs each file to the VM's API over
+# the libvirt network — no need to copy test data into the VM.
 #
 # Required variable:
-#   vm_ip — IP of the experiment VM
+#   vm_ip — IP of the experiment VM (Terraform output)
 #
 # Usage:
 #   ansible-playbook -i ansible/inventory/dynamic.py \
@@ -17,15 +16,6 @@
   hosts: baremetal
   gather_facts: false
 
-  vars:
-    vm_ssh_opts: >-
-      -o StrictHostKeyChecking=no
-      -o ConnectTimeout=30
-      -o BatchMode=yes
-      -i {{ vm_ssh_key }}
-    vm_target: "{{ vm_user }}@{{ vm_ip }}"
-    app_dir:   /opt/correctexam
-
   tasks:
 
     - name: Validate required variable
@@ -33,19 +23,28 @@
         that: vm_ip is defined and vm_ip != ""
         fail_msg: "vm_ip must be set via -e vm_ip=<ip>"
 
-    - name: Install requests on VM (seed.py dependency)
-      shell: |
-        ssh {{ vm_ssh_opts }} {{ vm_target }} \
-          "pip3 install --quiet requests"
-      changed_when: false
+    - name: Verify testdata_dir has 357.json
+      stat:
+        path: "{{ testdata_dir }}/357.json"
+      register: testdata_check
 
-    # Run seed.py three times — each pass imports one copy of 357.json.
-    # Using a loop so failures on one pass are surfaced immediately.
-    - name: "Seed pass {{ item }}/3 — import 357.json"
+    - name: Fail if testdata is missing
+      fail:
+        msg: >
+          {{ testdata_dir }}/357.json not found on the node.
+          Copy test data to the Grid5000 frontend first (once):
+            scp testData/*.json access.grid5000.fr:~/testData/
+      when: not testdata_check.stat.exists
+
+    # Run seed.py 3 times on the node — each pass imports one copy of 357.json
+    # into the VM's API over the libvirt NAT (http://{{ vm_ip }}:8082).
+    # Three passes give the scenarios enough courses/exams/sheets to work with.
+    - name: "Seed pass {{ item }}/3 — import 357.json into http://{{ vm_ip }}:8082"
       shell: |
-        ssh {{ vm_ssh_opts }} {{ vm_target }} \
-          "cd {{ app_dir }} && python3 workload/seed.py --files 357 2>&1" | \
-          grep -E "(ERROR|Import|Done|course|Traceback)" || true
+        python3 {{ repo_root }}/workload/seed.py \
+          --host http://{{ vm_ip }}:8082 \
+          --datadir {{ testdata_dir }} \
+          --files 357 2>&1 | grep -E "(ERROR|Import|Done|course|Traceback)" || true
       loop: [1, 2, 3]
       loop_control:
         label: "pass {{ item }}"
