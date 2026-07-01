@@ -1,0 +1,84 @@
+# experiments.yml — VM configuration matrix for Stage 1 provisioning experiments.
+#
+# Two phases:
+#   Phase 1 (RAM sweep)  — fix vCPUs=2, vary RAM to find the RAM saturation point.
+#   Phase 2 (CPU sweep)  — fix RAM=4GB,  vary vCPUs to observe CPU scaling.
+#
+# Run order matters: start with Phase 1 (cheaper, hits saturation earlier).
+# Each experiment runs s03_mixed at load steps [10, 25, 50, 100, 200, 500, 1000, 2000, 4000]
+# users × 5 min, stopping at the first step where failure_rate > 5% or p95 > 30s.
+#
+# Time budget (worst-case, no early stopping):
+#   ~56 min per experiment (provision + deploy + seed + 9 steps × 5 min + cleanup)
+#   Phase 1 only (5 configs)  → ~280 min → reserve 5 hours
+#   Full matrix  (8 configs)  → ~450 min → reserve 8 hours
+#   (Most constrained configs saturate at step 2–4 → actual time is much lower)
+#
+# NOTE: ramp_rate=50 is required so the 4000-user step reaches full load within 5 min
+# (4000 / 50 = 80 s ramp, leaving ~4 min at steady state).
+
+load_steps:
+  users:    [10, 25, 50, 100, 200, 500, 1000, 2000, 4000]
+  duration: "5m"
+  ramp_rate: 50           # users spawned per second (increased to handle 4 000-user steps)
+  saturation:
+    failure_rate_pct: 5   # stop if failure % exceeds this
+    p95_ms: 30000         # stop if p95 latency (ms) exceeds this
+
+experiments:
+
+  # ── Phase 1: RAM sweep (2 vCPUs, vary RAM) ─────────────────────────────────
+  # Goal: find minimum viable RAM and observe JVM OOM / swap / GC pressure.
+  # Note: 512 MB is below the JVM minimum heap for Quarkus — expect fast failure.
+
+  - label: "2cpu-512mb"
+    phase: 1
+    vcpus: 2
+    ram_mb: 512
+    disk_gb: 20
+
+  - label: "2cpu-1gb"
+    phase: 1
+    vcpus: 2
+    ram_mb: 1024
+    disk_gb: 20
+
+  - label: "2cpu-2gb"
+    phase: 1
+    vcpus: 2
+    ram_mb: 2048
+    disk_gb: 20
+
+  - label: "2cpu-4gb"
+    phase: 1
+    vcpus: 2
+    ram_mb: 4096
+    disk_gb: 20
+
+  - label: "2cpu-8gb"
+    phase: 1
+    vcpus: 2
+    ram_mb: 8192
+    disk_gb: 20
+
+  # ── Phase 2: CPU sweep (4 GB RAM, vary vCPUs) ──────────────────────────────
+  # Goal: observe CPU scaling — does doubling vCPUs double throughput?
+  # 2cpu-4gb already run in Phase 1, serves as the control point for this phase.
+
+  - label: "1cpu-4gb"
+    phase: 2
+    vcpus: 1
+    ram_mb: 4096
+    disk_gb: 20
+
+  - label: "4cpu-4gb"
+    phase: 2
+    vcpus: 4
+    ram_mb: 4096
+    disk_gb: 20
+
+  - label: "8cpu-4gb"
+    phase: 2
+    vcpus: 8
+    ram_mb: 4096
+    disk_gb: 20

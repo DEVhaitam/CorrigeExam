@@ -1,0 +1,74 @@
+# docker-compose.mon.yml — Monitoring stack for the Grid5000 bare-metal node.
+#
+# Runs Prometheus + Grafana DIRECTLY on the node (not inside a VM).
+# Prometheus scrapes the active experiment VM via file-based service discovery.
+# Docker bridge networking is sufficient: Linux containers can reach the VM's
+# libvirt NAT IP (192.168.122.x) the same way the host can.
+#
+# Start:  docker compose -f docker-compose.mon.yml up -d
+# Stop:   docker compose -f docker-compose.mon.yml down
+# Reload Prometheus targets (after a new VM is provisioned):
+#   curl -X POST http://localhost:9092/-/reload
+
+services:
+
+  prometheus:
+    image: prom/prometheus:v2.52.0
+    container_name: correctexam-prom-node
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=15d'
+      - '--web.enable-lifecycle'     # allows hot reload via POST /-/reload
+    ports:
+      - "9092:9090"                  # access Prometheus at http://localhost:9092
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./targets:/etc/prometheus/targets:ro
+      - prometheus_data:/prometheus
+    networks:
+      - mon-net
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:10.4.0
+    container_name: correctexam-grafana-node
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_INSTALL_PLUGINS: grafana-piechart-panel
+    ports:
+      - "3000:3000"                  # access Grafana at http://localhost:3000
+    volumes:
+      - ../../monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - grafana_data:/var/lib/grafana
+    networks:
+      - mon-net
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+
+  # Monitors the bare-metal node itself.
+  # Useful to confirm the node is not the bottleneck (CPU/RAM/IO).
+  node-exporter-host:
+    image: prom/node-exporter:v1.8.0
+    container_name: correctexam-node-exporter-host
+    command:
+      - '--path.procfs=/host/proc'
+      - '--path.sysfs=/host/sys'
+      - '--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)'
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+    pid: host
+    networks:
+      - mon-net
+    restart: unless-stopped
+
+networks:
+  mon-net:
+    driver: bridge
+
+volumes:
+  prometheus_data:
+  grafana_data:

@@ -1,0 +1,52 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    monitor: 'correctexam-g5k'
+
+scrape_configs:
+
+  # ── Self-monitoring ─────────────────────────────────────────────────────────
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+  # ── Bare-metal node ─────────────────────────────────────────────────────────
+  - job_name: 'node-exporter-host'
+    static_configs:
+      - targets: ['node-exporter-host:9100']
+        labels:
+          role: 'host'
+
+  # ── Experiment VM (file-based SD, one file per scrape endpoint) ──────────────
+  #
+  # run_experiment.py writes these 4 files before each experiment run, then
+  # reloads Prometheus via POST http://localhost:9092/-/reload.
+  # Each file contains one target entry:  ["<vm-ip>:<port>"] + config labels.
+  #
+  # After the experiment, all files are reset to [] to stop scraping.
+
+  # System metrics of the experiment VM (CPU, RAM, disk, network)
+  - job_name: 'vm-node-exporter'
+    file_sd_configs:
+      - files: ['/etc/prometheus/targets/vm_node.json']
+        refresh_interval: 30s
+
+  # Per-container metrics (correctexam-back, mysql, minio memory/CPU)
+  - job_name: 'vm-cadvisor'
+    file_sd_configs:
+      - files: ['/etc/prometheus/targets/vm_cadvisor.json']
+        refresh_interval: 30s
+
+  # JVM, HikariCP, Micrometer HTTP metrics from the Quarkus backend
+  - job_name: 'vm-correctexam-backend'
+    metrics_path: /management/prometheus
+    file_sd_configs:
+      - files: ['/etc/prometheus/targets/vm_app.json']
+        refresh_interval: 30s
+
+  # MySQL / InnoDB metrics
+  - job_name: 'vm-mysqld-exporter'
+    file_sd_configs:
+      - files: ['/etc/prometheus/targets/vm_mysql.json']
+        refresh_interval: 30s
