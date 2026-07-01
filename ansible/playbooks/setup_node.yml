@@ -126,6 +126,12 @@
         enabled: true
         state: started
 
+    - name: Start libvirt default network (creates virbr0 at 192.168.122.1)
+      shell: |
+        virsh net-info default 2>/dev/null | grep -q "Active:.*yes" || virsh net-start default
+        virsh net-autostart default
+      changed_when: false
+
     # ── 2. Terraform ────────────────────────────────────────────────────────
     - name: Check if Terraform is already installed
       stat:
@@ -211,6 +217,17 @@
       when: not testdata_check.stat.exists
 
     # ── 6. Local Docker registry ───────────────────────────────────────────
+    # Mark 192.168.122.1:5000 as an insecure registry so Docker allows HTTP push/pull.
+    - name: Configure Docker insecure registry for 192.168.122.1:5000
+      copy:
+        dest: /etc/docker/daemon.json
+        content: |
+          {"insecure-registries": ["192.168.122.1:5000"]}
+      notify: Restart Docker
+
+    - name: Flush handlers (restart Docker now if daemon.json changed)
+      meta: flush_handlers
+
     - name: Start local Docker registry on port 5000
       community.docker.docker_container:
         name:          registry
@@ -323,3 +340,9 @@
              ssh root@{{ inventory_hostname }} \
                "cd {{ repo_root }} && python3 grid5000/scripts/run_experiment.py --all"
           ═══════════════════════════════════════════════════════
+
+  handlers:
+    - name: Restart Docker
+      systemd:
+        name: docker
+        state: restarted
