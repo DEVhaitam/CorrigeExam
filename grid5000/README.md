@@ -115,8 +115,13 @@ ansible-playbook -i ansible/inventory/dynamic.py ansible/playbooks/setup_node.ym
 
 ```bash
 NODE=$(python3 -c "import json; print(json.load(open('grid5000/.node_info.json'))['node'])")
-ssh -N -L 3000:localhost:3000 -L 9092:localhost:9092 root@$NODE &
-# Grafana   → http://localhost:3000  (admin / admin)
+# Node FQDNs are only resolvable from inside Grid5000 — route through the access gateway
+ssh -N \
+  -L 3000:localhost:3000 \
+  -L 9092:localhost:9092 \
+  -o ProxyJump=haelhayan@access.grid5000.fr \
+  root@$NODE &
+# Grafana    → http://localhost:3000  (admin / admin)
 # Prometheus → http://localhost:9092
 ```
 
@@ -126,7 +131,7 @@ ssh -N -L 3000:localhost:3000 -L 9092:localhost:9092 root@$NODE &
 
 ```bash
 NODE=$(python3 -c "import json; print(json.load(open('grid5000/.node_info.json'))['node'])")
-ssh root@$NODE
+ssh -o ProxyJump=haelhayan@access.grid5000.fr root@$NODE
 ```
 
 Once on the node:

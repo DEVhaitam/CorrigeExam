@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+from __future__ import annotations
 """
 run_experiment.py — Orchestrate one or all Grid5000 provisioning experiments.
 

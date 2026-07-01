@@ -120,6 +120,12 @@
         enabled: true
         state: started
 
+    - name: Add G5K user to docker group (allows docker commands without sudo)
+      user:
+        name: "{{ g5k_username }}"
+        groups: docker
+        append: true
+
     - name: Enable and start libvirtd
       systemd:
         name: libvirtd
