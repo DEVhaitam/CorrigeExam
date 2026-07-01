@@ -132,7 +132,7 @@
         enabled: true
         state: started
 
-    - name: Configure QEMU to run as root (avoids image permission errors on Debian)
+    - name: Configure QEMU (run as root, disable AppArmor confinement for VMs)
       lineinfile:
         path: /etc/libvirt/qemu.conf
         regexp: "{{ item.regexp }}"
@@ -140,6 +140,7 @@
       loop:
         - { regexp: '^#?user\s*=', line: 'user = "root"' }
         - { regexp: '^#?group\s*=', line: 'group = "root"' }
+        - { regexp: '^#?security_driver\s*=', line: 'security_driver = "none"' }
       notify: Restart libvirtd
 
     - name: Flush handlers (restart libvirtd now if qemu.conf changed)

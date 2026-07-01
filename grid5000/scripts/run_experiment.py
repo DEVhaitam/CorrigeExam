@@ -50,7 +50,10 @@ SCENARIOS    = REPO_ROOT / "lab" / "scenarios"
 EXPERIMENTS  = REPO_ROOT / "grid5000" / "experiments.yml"
 
 PROMETHEUS_URL = "http://localhost:9092"
-SSH_KEY        = Path.home() / ".ssh" / "id_rsa"
+# When run via `sudo python3 ...`, Path.home() is /root but the key lives in the
+# G5K user's NFS home. SUDO_USER is set by sudo to the original caller.
+_sudo_user = os.environ.get("SUDO_USER")
+SSH_KEY = (Path("/home") / _sudo_user if _sudo_user else Path.home()) / ".ssh" / "id_rsa"
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────
@@ -86,12 +89,30 @@ def tf(*args, capture=False) -> subprocess.CompletedProcess:
     return run(["terraform", *args], cwd=TF_DIR, capture=capture)
 
 
+def _virsh_cleanup(label: str):
+    """Remove any stale libvirt domain and its volumes before a fresh apply.
+
+    Terraform tracks state separately from libvirt. If a previous apply failed
+    after defining the domain (e.g. QEMU crashed, AppArmor blocked the image),
+    the domain sits in libvirt as "shut off" but is absent from tfstate.  The
+    next apply then fails with "domain already exists".  Pre-cleaning libvirt
+    makes provision_vm idempotent across failures.
+    """
+    subprocess.run(["virsh", "destroy", label],  capture_output=True)
+    subprocess.run(["virsh", "undefine", label], capture_output=True)
+    for suffix in ("-disk.qcow2", "-cloudinit.iso"):
+        subprocess.run(["virsh", "vol-delete", f"{label}{suffix}", "--pool", "default"],
+                       capture_output=True)
+
+
 def provision_vm(config: dict) -> str:
     """Apply Terraform for the given config, return the VM IP."""
-    print(f"\n[terraform] Provisioning VM: {config['label']} "
+    label = config["label"]
+    print(f"\n[terraform] Provisioning VM: {label} "
           f"({config['vcpus']} vCPU, {config['ram_mb']} MB RAM) …")
+    _virsh_cleanup(label)  # remove stale domain/volumes so apply starts clean
     tf("apply", "-auto-approve",
-       f"-var=vm_name={config['label']}",
+       f"-var=vm_name={label}",
        f"-var=vm_vcpus={config['vcpus']}",
        f"-var=vm_ram_mb={config['ram_mb']}",
        f"-var=vm_disk_gb={config.get('disk_gb', 20)}",
