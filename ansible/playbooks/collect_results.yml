@@ -1,0 +1,56 @@
+---
+# collect_results.yml — Pull experiment results from the node to your laptop.
+#
+# Run from your laptop after all experiments finish.
+# Syncs lab/results/ from the node to ./lab/grid5000_results/<node>/ locally.
+#
+# Usage:
+#   ansible-playbook -i ansible/inventory/dynamic.py \
+#     ansible/playbooks/collect_results.yml
+#
+# Optional: pull a specific run only
+#   ansible-playbook -i ansible/inventory/dynamic.py \
+#     ansible/playbooks/collect_results.yml -e run_filter=2cpu-4gb
+
+- name: Collect experiment results from Grid5000 node
+  hosts: baremetal
+  gather_facts: false
+
+  vars:
+    remote_results: "{{ repo_root }}/lab/results"
+    local_results:  "{{ playbook_dir }}/../../lab/grid5000_results"
+    run_filter:     ""   # empty = collect everything
+
+  tasks:
+
+    - name: Ensure local results directory exists
+      local_action:
+        module: file
+        path:   "{{ local_results }}/{{ inventory_hostname }}"
+        state:  directory
+        mode:   '0755'
+
+    - name: List result files on node
+      shell: ls {{ remote_results }}/
+      register: remote_files
+      changed_when: false
+
+    - name: Show available results
+      debug:
+        msg: "{{ remote_files.stdout_lines }}"
+
+    # Fetch every file matching the filter (or everything if filter is empty)
+    - name: Fetch result files to laptop
+      fetch:
+        src:  "{{ remote_results }}/{{ item }}"
+        dest: "{{ local_results }}/{{ inventory_hostname }}/"
+        flat: false
+      loop: "{{ remote_files.stdout_lines | select('search', run_filter if run_filter else '.') | list }}"
+      when: item != ""
+
+    - name: Results collected
+      debug:
+        msg: >
+          Results saved to:
+          {{ local_results }}/{{ inventory_hostname }}/
+          Filter applied: '{{ run_filter if run_filter else "(all)" }}'

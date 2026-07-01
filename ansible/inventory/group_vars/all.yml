@@ -1,0 +1,39 @@
+---
+# Grid5000 identity
+# The NFS home dir (/home/<g5k_username>) is shared across every node at the
+# same site — clone the repo and store testData there once; any reserved node
+# picks them up automatically without re-downloading.
+g5k_username: helhayan
+g5k_home:     "/home/helhayan"
+
+# Repo lives in the shared NFS home
+repo_root:    "/home/helhayan/CorrigeExam"
+repo_url:     https://github.com/DEVhaitam/CorrigeExam.git
+repo_branch:  iac-experiments
+
+# Test data — large JSON exports (81 MB – 1 GB) stored in NFS home, never in git.
+# Copy once from your laptop:
+#   scp testData/*.json access.grid5000.fr:~/testData/
+testdata_dir: "/home/helhayan/testData"
+
+# Terraform
+terraform_version: "1.9.5"
+terraform_arch:    "linux_amd64"
+
+# Local Docker registry running on the bare-metal node.
+# VMs are on the libvirt NAT bridge (192.168.122.0/24).
+# The node is always reachable from VMs at 192.168.122.1.
+local_registry: "192.168.122.1:5000"
+image_tag:      "latest"
+
+# VM SSH credentials (ubuntu user, injected via cloud-init)
+vm_user:        ubuntu
+vm_ssh_key:     ~/.ssh/id_rsa
+
+# Locust scenarios dir (relative to repo_root, used by run_experiment.py)
+scenarios_dir:  "lab/scenarios"
+results_dir:    "lab/results"
+
+# Monitoring
+prometheus_url: "http://localhost:9092"
+grafana_url:    "http://localhost:3000"

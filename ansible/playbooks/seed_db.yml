@@ -1,0 +1,57 @@
+---
+# seed_db.yml — Seed the DB on an experiment VM.
+#
+# Replaces grid5000/scripts/seed_vm.sh.
+# Runs seed.py three times to populate the DB with:
+#   3 courses, 3 exams, ~51 exam sheets, ~765 student responses
+# This is the fixed dataset used by all experiments (S01–S04 scenarios).
+#
+# Required variable:
+#   vm_ip — IP of the experiment VM
+#
+# Usage:
+#   ansible-playbook -i ansible/inventory/dynamic.py \
+#     ansible/playbooks/seed_db.yml -e vm_ip=192.168.122.10
+
+- name: Seed database on experiment VM
+  hosts: baremetal
+  gather_facts: false
+
+  vars:
+    vm_ssh_opts: >-
+      -o StrictHostKeyChecking=no
+      -o ConnectTimeout=30
+      -o BatchMode=yes
+      -i {{ vm_ssh_key }}
+    vm_target: "{{ vm_user }}@{{ vm_ip }}"
+    app_dir:   /opt/correctexam
+
+  tasks:
+
+    - name: Validate required variable
+      assert:
+        that: vm_ip is defined and vm_ip != ""
+        fail_msg: "vm_ip must be set via -e vm_ip=<ip>"
+
+    - name: Install requests on VM (seed.py dependency)
+      shell: |
+        ssh {{ vm_ssh_opts }} {{ vm_target }} \
+          "pip3 install --quiet requests"
+      changed_when: false
+
+    # Run seed.py three times — each pass imports one copy of 357.json.
+    # Using a loop so failures on one pass are surfaced immediately.
+    - name: "Seed pass {{ item }}/3 — import 357.json"
+      shell: |
+        ssh {{ vm_ssh_opts }} {{ vm_target }} \
+          "cd {{ app_dir }} && python3 workload/seed.py --files 357 2>&1" | \
+          grep -E "(ERROR|Import|Done|course|Traceback)" || true
+      loop: [1, 2, 3]
+      loop_control:
+        label: "pass {{ item }}"
+
+    - name: Seeding complete
+      debug:
+        msg: >
+          DB seeded on {{ vm_ip }}: 3 courses, ~51 sheets, ~765 student responses.
+          VM is ready for load tests.

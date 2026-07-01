@@ -1,0 +1,116 @@
+---
+# deploy_app.yml — Deploy the CorrectExam stack on an experiment VM.
+#
+# Replaces grid5000/scripts/deploy_app.sh.
+# Runs on the bare-metal node; all VM interactions go via SSH from the node.
+#
+# Required variable:
+#   vm_ip   — IP address of the experiment VM (Terraform output)
+#
+# Usage (called by run_experiment.py, or manually):
+#   ansible-playbook -i ansible/inventory/dynamic.py \
+#     ansible/playbooks/deploy_app.yml -e vm_ip=192.168.122.10
+
+- name: Deploy CorrectExam stack on experiment VM
+  hosts: baremetal
+  gather_facts: false
+
+  vars:
+    vm_ssh_opts: >-
+      -o StrictHostKeyChecking=no
+      -o ConnectTimeout=30
+      -o BatchMode=yes
+      -i {{ vm_ssh_key }}
+    vm_target: "{{ vm_user }}@{{ vm_ip }}"
+    app_dir:   /opt/correctexam
+
+  tasks:
+
+    - name: Validate required variable
+      assert:
+        that: vm_ip is defined and vm_ip != ""
+        fail_msg: "vm_ip must be set via -e vm_ip=<ip>"
+
+    # ── 1. Wait for VM SSH ───────────────────────────────────────────────────
+    - name: Wait for VM SSH to become available
+      shell: ssh {{ vm_ssh_opts }} {{ vm_target }} "echo ok"
+      register: ssh_check
+      until:    ssh_check.rc == 0
+      retries:  30
+      delay:    10
+      changed_when: false
+
+    # ── 2. Create app directory on VM ────────────────────────────────────────
+    - name: Create app directory structure on VM
+      shell: |
+        ssh {{ vm_ssh_opts }} {{ vm_target }} \
+          "mkdir -p {{ app_dir }}/{workload,testData}"
+
+    # ── 3. Configure insecure registry (local node registry) ────────────────
+    # VMs pull images from the node's local registry (192.168.122.1:5000)
+    # instead of DockerHub. Docker requires explicit opt-in for HTTP registries.
+    - name: Configure Docker insecure registry on VM
+      shell: |
+        ssh {{ vm_ssh_opts }} {{ vm_target }} bash -s << 'ENDSSH'
+          echo '{"insecure-registries": ["{{ local_registry }}"]}' | \
+            sudo tee /etc/docker/daemon.json
+          sudo systemctl restart docker
+          sleep 5
+        ENDSSH
+
+    # ── 4. Copy app files to VM ──────────────────────────────────────────────
+    - name: Copy docker-compose.yml to VM
+      shell: |
+        scp {{ vm_ssh_opts }} \
+          {{ repo_root }}/grid5000/vm-docker-compose.yml \
+          {{ vm_target }}:{{ app_dir }}/docker-compose.yml
+
+    - name: Copy seed script to VM
+      shell: |
+        scp {{ vm_ssh_opts }} \
+          {{ repo_root }}/workload/seed.py \
+          {{ vm_target }}:{{ app_dir }}/workload/seed.py
+
+    - name: Copy test data to VM
+      shell: |
+        scp {{ vm_ssh_opts }} \
+          {{ repo_root }}/testData/357.json \
+          {{ vm_target }}:{{ app_dir }}/testData/357.json
+
+    # ── 5. Write .env pointing to the local registry ─────────────────────────
+    # The docker-compose image references use ${DOCKERHUB_USERNAME:-helhayan}.
+    # Overriding it to the local registry hostname makes the compose use
+    # 192.168.122.1:5000/correctexam-back:latest instead of DockerHub.
+    - name: Write .env file (use local registry instead of DockerHub)
+      shell: |
+        ssh {{ vm_ssh_opts }} {{ vm_target }} \
+          "printf 'DOCKERHUB_USERNAME={{ local_registry }}\nIMAGE_TAG={{ image_tag }}\n' \
+          > {{ app_dir }}/.env"
+
+    # ── 6. Start the app stack ───────────────────────────────────────────────
+    - name: Pull Docker images on VM (from local registry)
+      shell: |
+        ssh {{ vm_ssh_opts }} {{ vm_target }} \
+          "cd {{ app_dir }} && sudo docker compose pull 2>&1 | tail -10"
+      register: pull_result
+      changed_when: false
+
+    - name: Start Docker Compose stack
+      shell: |
+        ssh {{ vm_ssh_opts }} {{ vm_target }} \
+          "cd {{ app_dir }} && sudo docker compose up -d"
+
+    # ── 7. Health-check ──────────────────────────────────────────────────────
+    - name: Wait for backend to become healthy (up to 3 min)
+      shell: |
+        ssh {{ vm_ssh_opts }} {{ vm_target }} \
+          "curl -sf http://localhost:8082/management/health/live > /dev/null 2>&1"
+      register: health
+      until:    health.rc == 0
+      retries:  18
+      delay:    10
+      changed_when: false
+
+    - name: App is ready
+      debug:
+        msg: "CorrectExam is UP at http://{{ vm_ip }}:8082"

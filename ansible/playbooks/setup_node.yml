@@ -1,0 +1,248 @@
+---
+# setup_node.yml — Bootstrap the reserved Grid5000 bare-metal node.
+#
+# Replaces grid5000/setup_node.sh. Run ONCE after reserve.py.
+#
+# What it does:
+#   1. Install system packages (Docker, libvirt/KVM, Python, Ansible)
+#   2. Install Terraform
+#   3. Install Python packages (Locust, pyyaml, requests)
+#   4. Clone or update the CorrectExam repo into the NFS home dir
+#   5. Verify testdata_dir exists in the NFS home (warns if missing)
+#   6. Start a local Docker registry (port 5000) — solves the ARM image problem
+#   7. Build backend + frontend images for linux/amd64 on the node itself
+#      (images are pushed to the local registry; VMs pull from there)
+#   8. Initialise Terraform libvirt provider
+#   9. Start the monitoring stack (Prometheus + Grafana as Docker containers)
+#
+# NFS home layout (shared across all Rennes nodes):
+#   ~/CorrigeExam/   ← repo_root — code, scenarios, results
+#   ~/testData/      ← testdata_dir — large JSON exports (never in git)
+#                      copy once:  scp testData/*.json access.grid5000.fr:~/testData/
+#
+# ARM image note
+# --------------
+# Images built on an Apple Silicon Mac are linux/arm64 and will NOT run on
+# Grid5000 x86_64 nodes. This playbook solves the problem by building the
+# images directly on the node (which is amd64) and serving them via a local
+# registry at 192.168.122.1:5000. The deploy_app playbook configures VMs to
+# pull from this registry instead of DockerHub.
+#
+# Usage (from your laptop):
+#   ansible-playbook -i ansible/inventory/dynamic.py ansible/playbooks/setup_node.yml
+#
+# Force image rebuild (e.g. after a code change):
+#   ansible-playbook -i ansible/inventory/dynamic.py ansible/playbooks/setup_node.yml \
+#     -e rebuild_images=true
+
+- name: Bootstrap Grid5000 bare-metal node
+  hosts: baremetal
+  become: true
+  gather_facts: true
+
+  vars:
+    rebuild_images: false   # set to true via -e to force a Docker rebuild
+
+  tasks:
+
+    # ── 1. System packages ──────────────────────────────────────────────────
+    - name: Update apt cache
+      apt:
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: Install system packages
+      apt:
+        name:
+          - docker.io
+          - docker-compose-plugin
+          - qemu-kvm
+          - libvirt-daemon-system
+          - libvirt-clients
+          - virtinst
+          - genisoimage
+          - python3
+          - python3-pip
+          - python3-venv
+          - ansible
+          - curl
+          - wget
+          - unzip
+          - jq
+          - git
+        state: present
+
+    - name: Enable and start Docker
+      systemd:
+        name: docker
+        enabled: true
+        state: started
+
+    - name: Enable and start libvirtd
+      systemd:
+        name: libvirtd
+        enabled: true
+        state: started
+
+    # ── 2. Terraform ────────────────────────────────────────────────────────
+    - name: Check if Terraform is already installed
+      stat:
+        path: /usr/local/bin/terraform
+      register: tf_binary
+
+    - name: Download and install Terraform {{ terraform_version }}
+      when: not tf_binary.stat.exists
+      block:
+        - name: Download Terraform zip
+          get_url:
+            url: "https://releases.hashicorp.com/terraform/{{ terraform_version }}/terraform_{{ terraform_version }}_{{ terraform_arch }}.zip"
+            dest: /tmp/terraform.zip
+            mode: '0644'
+
+        - name: Unzip Terraform
+          unarchive:
+            src: /tmp/terraform.zip
+            dest: /usr/local/bin/
+            remote_src: true
+
+        - name: Remove zip
+          file:
+            path: /tmp/terraform.zip
+            state: absent
+
+    # ── 3. Python packages ──────────────────────────────────────────────────
+    - name: Install Python packages (Locust, pyyaml, requests)
+      pip:
+        name:
+          - locust
+          - pyyaml
+          - requests
+        state: present
+
+    # ── 4. Clone / update the repo ──────────────────────────────────────────
+    - name: Clone CorrectExam repo
+      git:
+        repo:    "{{ repo_url }}"
+        dest:    "{{ repo_root }}"
+        version: "{{ repo_branch }}"
+        force:   false          # don't overwrite uncommitted changes
+        update:  true
+      register: git_result
+
+    - name: Show git result
+      debug:
+        msg: "Repo {{ 'updated' if git_result.changed else 'already up-to-date' }} at {{ repo_root }}"
+
+    # ── 5. Local Docker registry ────────────────────────────────────────────
+    - name: Start local Docker registry on port 5000
+      community.docker.docker_container:
+        name:          registry
+        image:         registry:2
+        state:         started
+        restart_policy: always
+        ports:
+          - "5000:5000"
+      ignore_errors: true   # fallback to docker run if community.docker not available
+
+    - name: Start local registry (fallback via docker run)
+      shell: |
+        docker inspect registry >/dev/null 2>&1 || \
+        docker run -d --name registry --restart=always -p 5000:5000 registry:2
+      changed_when: false
+
+    # ── 6. Build Docker images (amd64) ─────────────────────────────────────
+    # Images are tagged for the local registry so VMs can pull them without
+    # going to DockerHub (solves ARM cross-compilation and DockerHub rate limits).
+
+    - name: Check if backend image already exists in local registry
+      uri:
+        url: "http://localhost:5000/v2/correctexam-back/tags/list"
+        status_code: [200, 404]
+      register: backend_exists
+
+    - name: Build backend image for linux/amd64
+      # Long task — Maven downloads deps and compiles; allow up to 30 min.
+      when: rebuild_images | bool or backend_exists.status == 404
+      shell: |
+        docker build --platform linux/amd64 \
+          -t {{ local_registry }}/correctexam-back:{{ image_tag }} \
+          {{ repo_root }}/corrigeExamBack/
+      async:  1800   # 30 min timeout
+      poll:   30
+      register: back_build
+
+    - name: Push backend image to local registry
+      when: rebuild_images | bool or backend_exists.status == 404
+      shell: docker push {{ local_registry }}/correctexam-back:{{ image_tag }}
+
+    - name: Check if frontend image already exists in local registry
+      uri:
+        url: "http://localhost:5000/v2/correctexam-front/tags/list"
+        status_code: [200, 404]
+      register: frontend_exists
+
+    - name: Build frontend image for linux/amd64
+      when: rebuild_images | bool or frontend_exists.status == 404
+      shell: |
+        docker build --platform linux/amd64 \
+          -t {{ local_registry }}/correctexam-front:{{ image_tag }} \
+          {{ repo_root }}/corrigeExamFront/
+      async:  1200   # 20 min timeout
+      poll:   30
+
+    - name: Push frontend image to local registry
+      when: rebuild_images | bool or frontend_exists.status == 404
+      shell: docker push {{ local_registry }}/correctexam-front:{{ image_tag }}
+
+    # ── 7. Terraform init ───────────────────────────────────────────────────
+    - name: Terraform init (download libvirt provider)
+      shell: terraform init -input=false
+      args:
+        chdir: "{{ repo_root }}/grid5000/terraform"
+      register: tf_init
+      changed_when: "'Terraform has been successfully initialized' in tf_init.stdout"
+
+    # ── 8. Monitoring stack ─────────────────────────────────────────────────
+    - name: Create empty Prometheus target files
+      copy:
+        content: "[]"
+        dest: "{{ repo_root }}/grid5000/monitoring/targets/{{ item }}"
+        force: false
+      loop:
+        - vm_node.json
+        - vm_cadvisor.json
+        - vm_app.json
+        - vm_mysql.json
+
+    - name: Start monitoring stack (Prometheus + Grafana)
+      shell: |
+        docker compose -f {{ repo_root }}/grid5000/monitoring/docker-compose.mon.yml \
+          up -d --remove-orphans
+      changed_when: false
+
+    # ── Summary ─────────────────────────────────────────────────────────────
+    - name: Print access info
+      debug:
+        msg: |
+          ═══════════════════════════════════════════════════════
+           Node setup complete: {{ inventory_hostname }}
+          ═══════════════════════════════════════════════════════
+           Monitoring (open SSH tunnel first):
+             Grafana    → http://localhost:3000  (admin/admin)
+             Prometheus → http://localhost:9092
+
+           SSH tunnel from your laptop:
+             ssh -N -L 3000:localhost:3000 -L 9092:localhost:9092 \
+               root@{{ inventory_hostname }}
+
+           Local image registry (for VMs):
+             {{ local_registry }}/correctexam-back:{{ image_tag }}
+             {{ local_registry }}/correctexam-front:{{ image_tag }}
+
+           Run experiments:
+             ansible-playbook -i ansible/inventory/dynamic.py \
+               ansible/playbooks/run_all.yml
+           — or on the node directly:
+             ssh root@{{ inventory_hostname }} \
+               "cd {{ repo_root }} && python3 grid5000/scripts/run_experiment.py --all"
+          ═══════════════════════════════════════════════════════
