@@ -3,18 +3,18 @@
 # The NFS home dir (/home/<g5k_username>) is shared across every node at the
 # same site — clone the repo and store testData there once; any reserved node
 # picks them up automatically without re-downloading.
-g5k_username: helhayan
-g5k_home:     "/home/helhayan"
+g5k_username: haelhayan
+g5k_home:     "/home/haelhayan"
 
 # Repo lives in the shared NFS home
-repo_root:    "/home/helhayan/CorrigeExam"
+repo_root:    "/home/haelhayan/CorrigeExam"
 repo_url:     https://github.com/DEVhaitam/CorrigeExam.git
 repo_branch:  iac-experiments
 
 # Test data — large JSON exports (81 MB – 1 GB) stored in NFS home, never in git.
 # Copy once from your laptop:
 #   scp testData/*.json rennes.g5k:~/testData/
-testdata_dir: "/home/helhayan/testData"
+testdata_dir: "/home/haelhayan/testData"
 
 # Terraform
 terraform_version: "1.9.5"

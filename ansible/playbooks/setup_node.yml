@@ -51,11 +51,54 @@
         update_cache: true
         cache_valid_time: 3600
 
-    - name: Install system packages
+    - name: Install apt prerequisites for Docker repo
       apt:
         name:
-          - docker.io
+          - ca-certificates
+          - curl
+          - gnupg
+          - lsb-release
+        state: present
+
+    - name: Create /etc/apt/keyrings directory
+      file:
+        path: /etc/apt/keyrings
+        state: directory
+        mode: '0755'
+
+    - name: Add Docker GPG key
+      shell: |
+        curl -fsSL https://download.docker.com/linux/debian/gpg \
+          -o /etc/apt/keyrings/docker.asc
+        chmod a+r /etc/apt/keyrings/docker.asc
+      args:
+        creates: /etc/apt/keyrings/docker.asc
+
+    - name: Add Docker apt repository
+      shell: |
+        echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] \
+          https://download.docker.com/linux/debian \
+          $(. /etc/os-release && echo "$VERSION_CODENAME") stable" \
+          > /etc/apt/sources.list.d/docker.list
+      args:
+        creates: /etc/apt/sources.list.d/docker.list
+
+    - name: Update apt cache after adding Docker repo
+      apt:
+        update_cache: true
+
+    - name: Install Docker packages
+      apt:
+        name:
+          - docker-ce
+          - docker-ce-cli
+          - containerd.io
           - docker-compose-plugin
+        state: present
+
+    - name: Install other system packages
+      apt:
+        name:
           - qemu-kvm
           - libvirt-daemon-system
           - libvirt-clients
@@ -65,7 +108,6 @@
           - python3-pip
           - python3-venv
           - ansible
-          - curl
           - wget
           - unzip
           - jq
@@ -122,18 +164,23 @@
     # ── 4. Clone / update the repo into NFS home ───────────────────────────
     # repo_root = /home/{{ g5k_username }}/CorrigeExam (NFS-mounted, shared
     # across all nodes at the site — no re-clone needed on subsequent reservations).
+    # Shell task handles all three states: missing dir, broken dir, valid repo.
     - name: Clone or update CorrectExam repo in NFS home
-      git:
-        repo:    "{{ repo_url }}"
-        dest:    "{{ repo_root }}"
-        version: "{{ repo_branch }}"
-        force:   false          # don't overwrite uncommitted changes
-        update:  true
+      shell: |
+        if [ -d "{{ repo_root }}/.git" ]; then
+          cd {{ repo_root }} && git fetch origin && git checkout {{ repo_branch }} && git pull origin {{ repo_branch }}
+          echo "UPDATED"
+        else
+          rm -rf {{ repo_root }}
+          git clone --branch {{ repo_branch }} {{ repo_url }} {{ repo_root }}
+          echo "CLONED"
+        fi
       register: git_result
+      changed_when: "'CLONED' in git_result.stdout or 'Already up to date' not in git_result.stdout"
 
     - name: Show git result
       debug:
-        msg: "Repo {{ 'updated' if git_result.changed else 'already up-to-date' }} at {{ repo_root }}"
+        msg: "{{ git_result.stdout_lines[-1] }} at {{ repo_root }}"
 
     # ── 5. Verify testdata_dir ──────────────────────────────────────────────
     # testData lives in NFS home — never in git (files are 81 MB – 1 GB).
