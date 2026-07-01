@@ -162,7 +162,20 @@
         virsh pool-autostart default
       changed_when: false
 
-    # ── 2. Terraform ────────────────────────────────────────────────────────
+    # ── 2. Root SSH key ────────────────────────────────────────────────────────
+    # run_experiment.py runs as root and passes /root/.ssh/id_rsa.pub to Terraform
+    # for cloud-init injection. G5K nodes don't have a root key by default.
+    # Copy the G5K user's NFS key into root's .ssh so terraform apply can read it.
+    - name: Copy G5K user SSH key to root (required by run_experiment.py / Terraform)
+      shell: |
+        mkdir -p /root/.ssh
+        cp {{ g5k_home }}/.ssh/id_rsa     /root/.ssh/id_rsa
+        cp {{ g5k_home }}/.ssh/id_rsa.pub /root/.ssh/id_rsa.pub
+        chmod 600 /root/.ssh/id_rsa
+      args:
+        creates: /root/.ssh/id_rsa
+
+    # ── 3. Terraform ────────────────────────────────────────────────────────
     - name: Check if Terraform is already installed
       stat:
         path: /usr/local/bin/terraform

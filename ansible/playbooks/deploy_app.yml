@@ -44,7 +44,7 @@
     - name: Create app directory structure on VM
       shell: |
         ssh {{ vm_ssh_opts }} {{ vm_target }} \
-          "mkdir -p {{ app_dir }}/{workload,testData}"
+          "mkdir -p {{ app_dir }}"
 
     # ── 3. Configure insecure registry (local node registry) ────────────────
     # VMs pull images from the node's local registry (192.168.122.1:5000)
@@ -65,17 +65,9 @@
           {{ repo_root }}/grid5000/vm-docker-compose.yml \
           {{ vm_target }}:{{ app_dir }}/docker-compose.yml
 
-    - name: Copy seed script to VM
-      shell: |
-        scp {{ vm_ssh_opts }} \
-          {{ repo_root }}/workload/seed.py \
-          {{ vm_target }}:{{ app_dir }}/workload/seed.py
-
-    - name: Copy test data to VM
-      shell: |
-        scp {{ vm_ssh_opts }} \
-          {{ repo_root }}/testData/357.json \
-          {{ vm_target }}:{{ app_dir }}/testData/357.json
+    # NOTE: seeding is done by seed_db.yml running seed.py from the bare-metal
+    # node via HTTP API calls — the VM does not need local copies of seed.py or
+    # the testData JSON files.
 
     # ── 5. Write .env pointing to the local registry ─────────────────────────
     # The docker-compose image references use ${DOCKERHUB_USERNAME:-helhayan}.
