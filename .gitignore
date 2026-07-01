@@ -2,6 +2,10 @@
 .DS_Store
 .claude/
 
+# Test data bundles — large JSON exports (81 MB – 1 GB), kept in Grid5000 home dir
+# Copy them to ~/testData/ on the G5K frontend once; every reserved node can read them via NFS
+testData/
+
 # Experiment runtime output — large, machine-generated, not for version control
 results/*/
 !results/.gitkeep
