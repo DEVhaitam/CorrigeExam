@@ -44,7 +44,7 @@
     - name: Create app directory structure on VM
       shell: |
         ssh {{ vm_ssh_opts }} {{ vm_target }} \
-          "mkdir -p {{ app_dir }}"
+          "sudo mkdir -p {{ app_dir }} && sudo chown ubuntu:ubuntu {{ app_dir }}"
 
     # ── 3. Configure insecure registry (local node registry) ────────────────
     # VMs pull images from the node's local registry (192.168.122.1:5000)
@@ -80,17 +80,17 @@
           > {{ app_dir }}/.env"
 
     # ── 6. Start the app stack ───────────────────────────────────────────────
-    - name: Pull Docker images on VM (from local registry)
+    - name: Pull Docker images on VM (from local registry + DockerHub)
       shell: |
         ssh {{ vm_ssh_opts }} {{ vm_target }} \
-          "cd {{ app_dir }} && sudo docker compose pull 2>&1 | tail -10"
+          "cd {{ app_dir }} && sudo COMPOSE_HTTP_TIMEOUT=300 docker-compose pull"
       register: pull_result
       changed_when: false
 
     - name: Start Docker Compose stack
       shell: |
         ssh {{ vm_ssh_opts }} {{ vm_target }} \
-          "cd {{ app_dir }} && sudo docker compose up -d"
+          "cd {{ app_dir }} && sudo COMPOSE_HTTP_TIMEOUT=300 docker-compose up -d"
 
     # ── 7. Health-check ──────────────────────────────────────────────────────
     - name: Wait for backend to become healthy (up to 3 min)

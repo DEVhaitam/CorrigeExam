@@ -19,7 +19,7 @@ package_upgrade: false
 
 packages:
   - docker.io
-  - docker-compose-plugin
+  - docker-compose
   - python3
   - python3-pip
   - curl

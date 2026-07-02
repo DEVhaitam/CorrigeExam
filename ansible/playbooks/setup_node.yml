@@ -114,6 +114,34 @@
           - git
         state: present
 
+    # ── 1b. Move big storage to /tmp (root is only 29 GB on G5K) ──────────────
+    # /dev/sda5 (/tmp) has ~485 GB and is on a separate partition.
+    # VM disk images (qcow2) and Docker layers fill the root quickly, so we
+    # redirect both to /tmp via symlinks before starting the daemons.
+    - name: Move Docker storage to /tmp (root filesystem only 29 GB)
+      shell: |
+        if [ ! -L /var/lib/docker ]; then
+          systemctl stop docker docker.socket 2>/dev/null || true
+          mkdir -p /tmp/docker
+          [ -d /var/lib/docker ] && mv /var/lib/docker /tmp/docker/lib || mkdir -p /tmp/docker/lib
+          ln -s /tmp/docker/lib /var/lib/docker
+          echo MOVED
+        fi
+      register: docker_move
+      changed_when: "'MOVED' in docker_move.stdout"
+
+    - name: Move libvirt images to /tmp (root filesystem only 29 GB)
+      shell: |
+        if [ ! -L /var/lib/libvirt/images ]; then
+          systemctl stop libvirtd libvirtd.socket libvirtd-ro.socket libvirtd-admin.socket 2>/dev/null || true
+          mkdir -p /tmp/libvirt/images
+          [ -d /var/lib/libvirt/images ] && mv /var/lib/libvirt/images/* /tmp/libvirt/images/ 2>/dev/null; rmdir /var/lib/libvirt/images 2>/dev/null || true
+          ln -s /tmp/libvirt/images /var/lib/libvirt/images
+          echo MOVED
+        fi
+      register: libvirt_move
+      changed_when: "'MOVED' in libvirt_move.stdout"
+
     - name: Enable and start Docker
       systemd:
         name: docker

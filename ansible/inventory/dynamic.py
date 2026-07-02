@@ -43,8 +43,13 @@ node = info["node"]
 # If this inventory is being executed ON the baremetal node itself
 # (run_experiment.py calls ansible from the node), use a local connection
 # instead of the round-trip laptop → access.g5k → node → access.g5k → node.
+import re as _re
 _my_fqdn = socket.getfqdn()
-ON_NODE   = (node.split(".")[0] in _my_fqdn) or (_my_fqdn.split(".")[0] in node)
+# True when this script is running ON a Grid5000 bare-metal node.
+# G5K nodes always match <cluster>-<N>.<site>.grid5000.fr — a pattern no
+# laptop will ever have — so this is more reliable than comparing against
+# node_info.json (which may lag behind the current reservation).
+ON_NODE = bool(_re.match(r"^[a-z]+-\d+\.[a-z]+\.grid5000\.fr$", _my_fqdn))
 
 if ON_NODE:
     # Direct local connection — no SSH needed when already on the target machine.
