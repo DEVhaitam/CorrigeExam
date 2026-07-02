@@ -29,9 +29,9 @@ services:
     healthcheck:
       test: ["CMD", "mysqladmin", "ping", "-u", "root", "-prootpassword", "--silent"]
       interval: 10s
-      timeout: 5s
-      retries: 10
-      start_period: 30s
+      timeout: 10s
+      retries: 30
+      start_period: 120s
     restart: unless-stopped
 
   minio:

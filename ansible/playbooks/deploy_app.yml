@@ -93,10 +93,12 @@
           "cd {{ app_dir }} && sudo COMPOSE_HTTP_TIMEOUT=300 docker-compose up -d"
 
     # ── 7. Health-check ──────────────────────────────────────────────────────
+    # Management port 9000 (container) is mapped to 9091 on the VM host.
+    # quarkus.management.enabled=true moves health off the main port (8082).
     - name: Wait for backend to become healthy (up to 10 min)
       shell: |
         ssh {{ vm_ssh_opts }} {{ vm_target }} \
-          "curl -sf -m 5 http://localhost:8082/management/health/live > /dev/null 2>&1"
+          "curl -sf -m 5 http://localhost:9091/management/health/live > /dev/null 2>&1"
       register: health
       until:    health.rc == 0
       retries:  60
