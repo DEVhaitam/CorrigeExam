@@ -52,10 +52,9 @@
     - name: Configure Docker insecure registry on VM
       shell: |
         ssh {{ vm_ssh_opts }} {{ vm_target }} bash -s << 'ENDSSH'
-          echo '{"insecure-registries": ["{{ local_registry }}"]}' | \
-            sudo tee /etc/docker/daemon.json
-          sudo systemctl restart docker
-          sleep 5
+        echo '{"insecure-registries":["{{ local_registry }}"],"default-address-pools":[{"base":"10.100.0.0/16","size":24}]}' | sudo tee /etc/docker/daemon.json
+        sudo systemctl restart docker
+        sleep 5
         ENDSSH
 
     # ── 4. Copy app files to VM ──────────────────────────────────────────────
