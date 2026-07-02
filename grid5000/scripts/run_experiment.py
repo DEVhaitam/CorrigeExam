@@ -368,7 +368,12 @@ def main():
 
     summaries = []
     for config in configs:
-        summary = run_one_experiment(config, exp_conf, dry_run=args.dry_run)
+        try:
+            summary = run_one_experiment(config, exp_conf, dry_run=args.dry_run)
+        except Exception as exc:
+            print(f"\n[ERROR] Config {config['label']} failed: {exc}")
+            print("[ERROR] Continuing to next config …\n")
+            summary = {"label": config["label"], "error": str(exc), "steps": []}
         summaries.append(summary)
 
     if not args.dry_run:
