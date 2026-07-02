@@ -19,7 +19,6 @@ package_upgrade: false
 
 packages:
   - docker.io
-  - docker-compose
   - python3
   - python3-pip
   - curl
@@ -28,6 +27,11 @@ packages:
 runcmd:
   - systemctl enable --now docker
   - usermod -aG docker ubuntu
+  - |
+    curl -fsSL \
+      https://github.com/docker/compose/releases/download/v2.27.0/docker-compose-linux-x86_64 \
+      -o /usr/local/bin/docker-compose
+  - chmod +x /usr/local/bin/docker-compose
   - pip3 install --quiet requests
 
 # Make cloud-init status visible in the journal

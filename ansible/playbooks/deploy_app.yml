@@ -93,13 +93,13 @@
           "cd {{ app_dir }} && sudo COMPOSE_HTTP_TIMEOUT=300 docker-compose up -d"
 
     # ── 7. Health-check ──────────────────────────────────────────────────────
-    - name: Wait for backend to become healthy (up to 3 min)
+    - name: Wait for backend to become healthy (up to 10 min)
       shell: |
         ssh {{ vm_ssh_opts }} {{ vm_target }} \
-          "curl -sf http://localhost:8082/management/health/live > /dev/null 2>&1"
+          "curl -sf -m 5 http://localhost:8082/management/health/live > /dev/null 2>&1"
       register: health
       until:    health.rc == 0
-      retries:  18
+      retries:  60
       delay:    10
       changed_when: false
 
