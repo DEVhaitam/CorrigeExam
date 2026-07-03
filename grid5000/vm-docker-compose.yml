@@ -29,9 +29,9 @@ services:
     healthcheck:
       test: ["CMD", "mysqladmin", "ping", "-u", "root", "-prootpassword", "--silent"]
       interval: 10s
-      timeout: 5s
-      retries: 10
-      start_period: 30s
+      timeout: 10s
+      retries: 30
+      start_period: 120s
     restart: unless-stopped
 
   minio:
@@ -98,7 +98,7 @@ services:
       - "9091:9000"    # management/metrics — Prometheus on node scrapes this at :9091
     depends_on:
       mysql:
-        condition: service_healthy
+        condition: service_started   # Quarkus retries the datasource connection internally
       minio:
         condition: service_healthy
       minio-init:
@@ -137,7 +137,7 @@ services:
       - "9104:9104"
     depends_on:
       mysql:
-        condition: service_healthy
+        condition: service_started   # exporter reconnects automatically once MySQL is up
     restart: unless-stopped
 
   # Full Linux bind-mounts — accurate VM system metrics (CPU, RAM, disk, network)

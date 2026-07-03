@@ -114,16 +114,44 @@
           - git
         state: present
 
+    # ── 1b. Move big storage to /tmp (root is only 29 GB on G5K) ──────────────
+    # /dev/sda5 (/tmp) has ~485 GB and is on a separate partition.
+    # VM disk images (qcow2) and Docker layers fill the root quickly, so we
+    # redirect both to /tmp via symlinks before starting the daemons.
+    - name: Move Docker storage to /tmp (root filesystem only 29 GB)
+      shell: |
+        if [ ! -L /var/lib/docker ]; then
+          systemctl stop docker docker.socket 2>/dev/null || true
+          mkdir -p /tmp/docker
+          [ -d /var/lib/docker ] && mv /var/lib/docker /tmp/docker/lib || mkdir -p /tmp/docker/lib
+          ln -s /tmp/docker/lib /var/lib/docker
+          echo MOVED
+        fi
+      register: docker_move
+      changed_when: "'MOVED' in docker_move.stdout"
+
+    - name: Move libvirt images to /tmp (root filesystem only 29 GB)
+      shell: |
+        if [ ! -L /var/lib/libvirt/images ]; then
+          systemctl stop libvirtd libvirtd.socket libvirtd-ro.socket libvirtd-admin.socket 2>/dev/null || true
+          mkdir -p /tmp/libvirt/images
+          [ -d /var/lib/libvirt/images ] && mv /var/lib/libvirt/images/* /tmp/libvirt/images/ 2>/dev/null; rmdir /var/lib/libvirt/images 2>/dev/null || true
+          ln -s /tmp/libvirt/images /var/lib/libvirt/images
+          echo MOVED
+        fi
+      register: libvirt_move
+      changed_when: "'MOVED' in libvirt_move.stdout"
+
     - name: Enable and start Docker
       systemd:
         name: docker
         enabled: true
         state: started
 
-    - name: Add G5K user to docker group (allows docker commands without sudo)
+    - name: Add G5K user to docker and libvirt groups (allows commands without sudo)
       user:
         name: "{{ g5k_username }}"
-        groups: docker
+        groups: docker,libvirt
         append: true
 
     - name: Enable and start libvirtd
@@ -132,13 +160,50 @@
         enabled: true
         state: started
 
+    - name: Configure QEMU (run as root, disable AppArmor confinement for VMs)
+      lineinfile:
+        path: /etc/libvirt/qemu.conf
+        regexp: "{{ item.regexp }}"
+        line: "{{ item.line }}"
+      loop:
+        - { regexp: '^#?user\s*=', line: 'user = "root"' }
+        - { regexp: '^#?group\s*=', line: 'group = "root"' }
+        - { regexp: '^#?security_driver\s*=', line: 'security_driver = "none"' }
+      notify: Restart libvirtd
+
+    - name: Flush handlers (restart libvirtd now if qemu.conf changed)
+      meta: flush_handlers
+
     - name: Start libvirt default network (creates virbr0 at 192.168.122.1)
       shell: |
         virsh net-info default 2>/dev/null | grep -q "Active:.*yes" || virsh net-start default
         virsh net-autostart default
       changed_when: false
 
-    # ── 2. Terraform ────────────────────────────────────────────────────────
+    - name: Create and start libvirt default storage pool
+      shell: |
+        if ! virsh pool-info default &>/dev/null; then
+          virsh pool-define-as default dir --target /var/lib/libvirt/images/
+          virsh pool-build default
+        fi
+        virsh pool-info default | grep -q "State:.*running" || virsh pool-start default
+        virsh pool-autostart default
+      changed_when: false
+
+    # ── 2. Root SSH key ────────────────────────────────────────────────────────
+    # run_experiment.py runs as root and passes /root/.ssh/id_rsa.pub to Terraform
+    # for cloud-init injection. G5K nodes don't have a root key by default.
+    # Copy the G5K user's NFS key into root's .ssh so terraform apply can read it.
+    - name: Copy G5K user SSH key to root (required by run_experiment.py / Terraform)
+      shell: |
+        mkdir -p /root/.ssh
+        cp {{ g5k_home }}/.ssh/id_rsa     /root/.ssh/id_rsa
+        cp {{ g5k_home }}/.ssh/id_rsa.pub /root/.ssh/id_rsa.pub
+        chmod 600 /root/.ssh/id_rsa
+      args:
+        creates: /root/.ssh/id_rsa
+
+    # ── 3. Terraform ────────────────────────────────────────────────────────
     - name: Check if Terraform is already installed
       stat:
         path: /usr/local/bin/terraform
@@ -351,4 +416,9 @@
     - name: Restart Docker
       systemd:
         name: docker
+        state: restarted
+
+    - name: Restart libvirtd
+      systemd:
+        name: libvirtd
         state: restarted

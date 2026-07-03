@@ -44,7 +44,7 @@
     - name: Create app directory structure on VM
       shell: |
         ssh {{ vm_ssh_opts }} {{ vm_target }} \
-          "mkdir -p {{ app_dir }}/{workload,testData}"
+          "sudo mkdir -p {{ app_dir }} && sudo chown ubuntu:ubuntu {{ app_dir }}"
 
     # ── 3. Configure insecure registry (local node registry) ────────────────
     # VMs pull images from the node's local registry (192.168.122.1:5000)
@@ -52,10 +52,9 @@
     - name: Configure Docker insecure registry on VM
       shell: |
         ssh {{ vm_ssh_opts }} {{ vm_target }} bash -s << 'ENDSSH'
-          echo '{"insecure-registries": ["{{ local_registry }}"]}' | \
-            sudo tee /etc/docker/daemon.json
-          sudo systemctl restart docker
-          sleep 5
+        echo '{"insecure-registries":["{{ local_registry }}"],"default-address-pools":[{"base":"10.100.0.0/16","size":24}]}' | sudo tee /etc/docker/daemon.json
+        sudo systemctl restart docker
+        sleep 5
         ENDSSH
 
     # ── 4. Copy app files to VM ──────────────────────────────────────────────
@@ -65,17 +64,9 @@
           {{ repo_root }}/grid5000/vm-docker-compose.yml \
           {{ vm_target }}:{{ app_dir }}/docker-compose.yml
 
-    - name: Copy seed script to VM
-      shell: |
-        scp {{ vm_ssh_opts }} \
-          {{ repo_root }}/workload/seed.py \
-          {{ vm_target }}:{{ app_dir }}/workload/seed.py
-
-    - name: Copy test data to VM
-      shell: |
-        scp {{ vm_ssh_opts }} \
-          {{ repo_root }}/testData/357.json \
-          {{ vm_target }}:{{ app_dir }}/testData/357.json
+    # NOTE: seeding is done by seed_db.yml running seed.py from the bare-metal
+    # node via HTTP API calls — the VM does not need local copies of seed.py or
+    # the testData JSON files.
 
     # ── 5. Write .env pointing to the local registry ─────────────────────────
     # The docker-compose image references use ${DOCKERHUB_USERNAME:-helhayan}.
@@ -88,26 +79,28 @@
           > {{ app_dir }}/.env"
 
     # ── 6. Start the app stack ───────────────────────────────────────────────
-    - name: Pull Docker images on VM (from local registry)
+    - name: Pull Docker images on VM (from local registry + DockerHub)
       shell: |
         ssh {{ vm_ssh_opts }} {{ vm_target }} \
-          "cd {{ app_dir }} && sudo docker compose pull 2>&1 | tail -10"
+          "cd {{ app_dir }} && sudo COMPOSE_HTTP_TIMEOUT=300 docker-compose pull"
       register: pull_result
       changed_when: false
 
     - name: Start Docker Compose stack
       shell: |
         ssh {{ vm_ssh_opts }} {{ vm_target }} \
-          "cd {{ app_dir }} && sudo docker compose up -d"
+          "cd {{ app_dir }} && sudo COMPOSE_HTTP_TIMEOUT=300 docker-compose up -d"
 
     # ── 7. Health-check ──────────────────────────────────────────────────────
-    - name: Wait for backend to become healthy (up to 3 min)
+    # Management port 9000 (container) is mapped to 9091 on the VM host.
+    # quarkus.management.enabled=true moves health off the main port (8082).
+    - name: Wait for backend to become healthy (up to 10 min)
       shell: |
         ssh {{ vm_ssh_opts }} {{ vm_target }} \
-          "curl -sf http://localhost:8082/management/health/live > /dev/null 2>&1"
+          "curl -sf -m 5 http://localhost:9091/management/health/live > /dev/null 2>&1"
       register: health
       until:    health.rc == 0
-      retries:  18
+      retries:  60
       delay:    10
       changed_when: false
 
