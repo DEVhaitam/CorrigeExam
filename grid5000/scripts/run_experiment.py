@@ -130,7 +130,7 @@ def provision_vm(config: dict) -> str:
     print(f"\n[terraform] Provisioning VM: {label} "
           f"({config['vcpus']} vCPU, {config['ram_mb']} MB RAM) …")
     _virsh_cleanup(label)  # remove stale domain/volumes so apply starts clean
-    tf("apply", "-auto-approve",
+    tf("apply", "-auto-approve", "-lock=false",
        f"-var=vm_name={label}",
        f"-var=vm_vcpus={config['vcpus']}",
        f"-var=vm_ram_mb={config['ram_mb']}",
