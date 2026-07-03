@@ -12,7 +12,21 @@ What it does per experiment config:
   4. Update Prometheus targets to point at the VM IP
   5. Locust           → run s03_mixed at increasing user counts until saturation
   6. Terraform destroy → clean up the VM
-  7. Save results to lab/results/<run_id>_<config>/
+  7. Save results to lab/results/<config>/<run_id>/
+
+Results directory layout per run:
+  lab/results/
+    <config>/           e.g. 2cpu-4gb/
+      <run_id>/         e.g. 20260702_135946/
+        u10_stats.csv
+        u10_stats_history.csv
+        u10_failures.csv
+        u10_exceptions.csv
+        u10.html
+        u10_system.csv      ← VM system metrics (CPU, RAM, disk, net, …) from Prometheus
+        u25_stats.csv
+        …
+        summary.json
 
 Usage:
   # Run a single experiment config:
@@ -35,6 +49,9 @@ import os
 import subprocess
 import sys
 import time
+import urllib.parse
+import urllib.request
+from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
 
@@ -49,7 +66,9 @@ RESULTS_DIR  = REPO_ROOT / "lab" / "results"
 SCENARIOS    = REPO_ROOT / "lab" / "scenarios"
 EXPERIMENTS  = REPO_ROOT / "grid5000" / "experiments.yml"
 
-PROMETHEUS_URL = "http://localhost:9092"
+PROMETHEUS_URL  = "http://localhost:9092"
+SCRAPE_INTERVAL = 15  # seconds — matches prometheus.yml global.scrape_interval
+
 # When run via `sudo python3 ...`, Path.home() is /root but the key lives in the
 # G5K user's NFS home. SUDO_USER is set by sudo to the original caller.
 _sudo_user = os.environ.get("SUDO_USER")
@@ -153,7 +172,6 @@ def update_prometheus_targets(config: dict, vm_ip: str):
     print(f"[prometheus] 4 target files written → {vm_ip}  (config: {config['label']})")
 
     try:
-        import urllib.request
         req = urllib.request.Request(
             f"{PROMETHEUS_URL}/-/reload", method="POST", data=b""
         )
@@ -169,6 +187,130 @@ def clear_prometheus_targets():
         (TARGETS_DIR / name).write_text("[]")
 
 
+# ── System metrics collection (Prometheus) ────────────────────────────────────
+
+# Prometheus PromQL templates for per-VM system metrics.
+# {ip} is replaced at call time with the VM's IP address.
+# Exporter ports must match vm-docker-compose.yml:
+#   node-exporter → VM:9100
+#   cadvisor      → VM:8081
+#   app metrics   → VM:9091  (Quarkus management)
+#   mysqld-exporter → VM:9104
+_SYSTEM_METRICS: dict[str, str] = {
+    # ── VM-level (node-exporter) ──────────────────────────────────────────────
+    "cpu_pct":
+        "100 * (1 - avg(rate(node_cpu_seconds_total"
+        "{{instance='{ip}:9100', mode='idle'}}[1m])))",
+    "ram_used_bytes":
+        "node_memory_MemTotal_bytes{{instance='{ip}:9100'}}"
+        " - node_memory_MemAvailable_bytes{{instance='{ip}:9100'}}",
+    "ram_total_bytes":
+        "node_memory_MemTotal_bytes{{instance='{ip}:9100'}}",
+    "swap_used_bytes":
+        "node_memory_SwapTotal_bytes{{instance='{ip}:9100'}}"
+        " - node_memory_SwapFree_bytes{{instance='{ip}:9100'}}",
+    "swap_total_bytes":
+        "node_memory_SwapTotal_bytes{{instance='{ip}:9100'}}",
+    "disk_read_bps":
+        "sum(rate(node_disk_read_bytes_total{{instance='{ip}:9100'}}[1m]))",
+    "disk_write_bps":
+        "sum(rate(node_disk_written_bytes_total{{instance='{ip}:9100'}}[1m]))",
+    "net_rx_bps":
+        "sum(rate(node_network_receive_bytes_total"
+        "{{instance='{ip}:9100', device!='lo'}}[1m]))",
+    "net_tx_bps":
+        "sum(rate(node_network_transmit_bytes_total"
+        "{{instance='{ip}:9100', device!='lo'}}[1m]))",
+    # ── Container-level (cadvisor) ────────────────────────────────────────────
+    "mysql_cpu_pct":
+        "100 * rate(container_cpu_usage_seconds_total"
+        "{{instance='{ip}:8081', name='correctexam-mysql'}}[1m])",
+    "mysql_mem_bytes":
+        "container_memory_usage_bytes"
+        "{{instance='{ip}:8081', name='correctexam-mysql'}}",
+    "back_cpu_pct":
+        "100 * rate(container_cpu_usage_seconds_total"
+        "{{instance='{ip}:8081', name='correctexam-back'}}[1m])",
+    "back_mem_bytes":
+        "container_memory_usage_bytes"
+        "{{instance='{ip}:8081', name='correctexam-back'}}",
+    # ── Application (Quarkus JVM via Micrometer/Prometheus) ──────────────────
+    "jvm_heap_bytes":
+        "sum(jvm_memory_used_bytes{{instance='{ip}:9091', area='heap'}})",
+    "jvm_nonheap_bytes":
+        "sum(jvm_memory_used_bytes{{instance='{ip}:9091', area='nonheap'}})",
+    # ── MySQL (mysqld-exporter) ───────────────────────────────────────────────
+    "mysql_threads_connected":
+        "mysql_global_status_threads_connected{{instance='{ip}:9104'}}",
+    "mysql_queries_per_sec":
+        "rate(mysql_global_status_queries{{instance='{ip}:9104'}}[1m])",
+    "mysql_slow_queries":
+        "rate(mysql_global_status_slow_queries{{instance='{ip}:9104'}}[1m])",
+}
+
+
+def _prom_range(query: str, start: float, end: float) -> list[tuple[float, float]]:
+    """Query Prometheus range API. Returns [(unix_ts, value), …] or []."""
+    params = urllib.parse.urlencode({
+        "query": query,
+        "start": str(int(start)),
+        "end":   str(int(end)),
+        "step":  str(SCRAPE_INTERVAL),
+    })
+    url = f"{PROMETHEUS_URL}/api/v1/query_range?{params}"
+    try:
+        with urllib.request.urlopen(url, timeout=10) as resp:
+            data = json.loads(resp.read())
+        if data.get("status") != "success":
+            return []
+        results = data.get("data", {}).get("result", [])
+        if not results:
+            return []
+        if len(results) == 1:
+            return [(float(ts), float(v)) for ts, v in results[0]["values"]]
+        # Multiple series returned (e.g. pre-aggregated sum) — sum across series
+        acc: dict[float, float] = defaultdict(float)
+        for series in results:
+            for ts, v in series["values"]:
+                acc[float(ts)] += float(v)
+        return sorted(acc.items())
+    except Exception:
+        return []
+
+
+def collect_system_metrics(vm_ip: str, start_ts: float, end_ts: float, out_path: Path):
+    """
+    Query Prometheus for all system metrics over [start_ts, end_ts] and save to CSV.
+
+    Output format: wide CSV, one row per 15-second scrape tick, one column per metric.
+    Non-fatal: logs a warning and skips if Prometheus is unreachable or returns no data.
+    """
+    series: dict[str, dict[float, float]] = {}
+    all_ts: set[float] = set()
+
+    for name, tmpl in _SYSTEM_METRICS.items():
+        query = tmpl.format(ip=vm_ip)
+        pts = _prom_range(query, start_ts, end_ts)
+        if pts:
+            series[name] = dict(pts)
+            all_ts.update(ts for ts, _ in pts)
+
+    if not series:
+        print("  [system-metrics] No data from Prometheus (not running or no data yet); skipping.")
+        return
+
+    sorted_ts = sorted(all_ts)
+    columns   = list(_SYSTEM_METRICS.keys())   # consistent column order
+    with open(out_path, "w", newline="") as fh:
+        w = csv.writer(fh)
+        w.writerow(["timestamp"] + columns)
+        for ts in sorted_ts:
+            row = [ts] + [series[col].get(ts, "") for col in columns]
+            w.writerow(row)
+
+    print(f"  [system-metrics] {len(sorted_ts)} rows × {len(series)} metrics → {out_path.name}")
+
+
 # ── Locust ────────────────────────────────────────────────────────────────────
 
 def run_locust_step(
@@ -177,10 +319,16 @@ def run_locust_step(
     users: int,
     duration: str,
     ramp_rate: int,
-    run_prefix: Path,
-) -> dict:
-    """Run one locust step and return parsed stats."""
-    csv_prefix = str(run_prefix) + f"_u{users}"
+    run_dir: Path,
+) -> tuple[dict, float, float]:
+    """
+    Run one locust step.
+
+    Returns (parsed_stats, step_start_ts, step_end_ts).
+    The timestamps are used by the caller to query Prometheus for system metrics
+    covering exactly the duration of this step.
+    """
+    csv_prefix = str(run_dir / f"u{users}")
     cmd = [
         "locust",
         "-f", str(SCENARIOS / "s03_mixed.py"),
@@ -194,8 +342,10 @@ def run_locust_step(
         "--loglevel", "WARNING",
     ]
     print(f"\n[locust] {config['label']} — {users} users × {duration}")
+    t_start = time.time()
     run(cmd)
-    return parse_stats(Path(csv_prefix + "_stats.csv"))
+    t_end = time.time()
+    return parse_stats(Path(csv_prefix + "_stats.csv")), t_start, t_end
 
 
 def parse_stats(stats_csv: Path) -> dict:
@@ -241,15 +391,17 @@ def run_one_experiment(config: dict, exp_conf: dict, dry_run: bool = False) -> d
       provision → deploy → seed → load steps → destroy.
     Returns a summary dict.
     """
-    label    = config["label"]
-    run_id   = datetime.now().strftime("%Y%m%d_%H%M%S")
-    RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+    label  = config["label"]
+    run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
 
-    run_prefix = RESULTS_DIR / f"{run_id}_{label}"
-    summary    = {"label": label, "run_id": run_id, "steps": []}
+    # Each run gets its own directory: lab/results/<config>/<run_id>/
+    run_dir = RESULTS_DIR / label / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    summary = {"label": label, "run_id": run_id, "steps": []}
 
     if dry_run:
-        print(f"[dry-run] Would run experiment: {label}")
+        print(f"[dry-run] Would run experiment: {label}  →  {run_dir}")
         return summary
 
     vm_ip = None
@@ -279,23 +431,33 @@ def run_one_experiment(config: dict, exp_conf: dict, dry_run: bool = False) -> d
             "--private-key", str(SSH_KEY),
         ])
 
-        # 4 — Update Prometheus
+        # 4 — Update Prometheus targets
         update_prometheus_targets(config, vm_ip)
+        # Give Prometheus one scrape cycle to pick up the new targets before load starts
+        time.sleep(SCRAPE_INTERVAL + 5)
 
         # 5 — Run load steps
-        thresholds = exp_conf["load_steps"]["saturation"]
+        thresholds    = exp_conf["load_steps"]["saturation"]
         breaking_point = None
 
         for users in exp_conf["load_steps"]["users"]:
-            stats = run_locust_step(
+            stats, t_start, t_end = run_locust_step(
                 vm_ip=vm_ip,
                 config=config,
                 users=users,
                 duration=exp_conf["load_steps"]["duration"],
                 ramp_rate=exp_conf["load_steps"]["ramp_rate"],
-                run_prefix=run_prefix,
+                run_dir=run_dir,
             )
             summary["steps"].append({"users": users, **stats})
+
+            # Collect system metrics from Prometheus for this step's time window
+            collect_system_metrics(
+                vm_ip=vm_ip,
+                start_ts=t_start,
+                end_ts=t_end,
+                out_path=run_dir / f"u{users}_system.csv",
+            )
 
             if is_saturated(stats, thresholds):
                 breaking_point = users
@@ -319,7 +481,7 @@ def run_one_experiment(config: dict, exp_conf: dict, dry_run: bool = False) -> d
         clear_prometheus_targets()
 
     # 7 — Save summary
-    summary_file = RESULTS_DIR / f"{run_id}_{label}_summary.json"
+    summary_file = run_dir / "summary.json"
     summary_file.write_text(json.dumps(summary, indent=2))
     print(f"[result] Summary → {summary_file}")
 

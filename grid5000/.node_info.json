@@ -1,8 +1,8 @@
 {
   "site": "rennes",
   "cluster": "parasilo",
-  "node": "parasilo-8.rennes.grid5000.fr",
-  "walltime": "18:00:00",
+  "node": "parasilo-9.rennes.grid5000.fr",
+  "walltime": "24:00:00",
   "job_name": "correctexam-perf",
   "pinned": false
 }
