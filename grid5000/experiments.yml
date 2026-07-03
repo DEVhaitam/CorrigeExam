@@ -9,17 +9,21 @@
 # users × 5 min, stopping at the first step where failure_rate > 5% or p95 > 30s.
 #
 # Time budget (worst-case, no early stopping):
-#   ~56 min per experiment (provision + deploy + seed + 9 steps × 5 min + cleanup)
-#   Phase 1 only (5 configs)  → ~280 min → reserve 5 hours
-#   Full matrix  (8 configs)  → ~450 min → reserve 8 hours
+#   ~101 min per experiment (provision + deploy + seed + 9 steps × 10 min + cleanup)
+#   Phase 1 only (5 configs)  → ~505 min → reserve 9 hours
+#   Full matrix  (8 configs)  → ~810 min → reserve 14 hours
 #   (Most constrained configs saturate at step 2–4 → actual time is much lower)
+#   18-hour Grid5000 reservation comfortably covers the full matrix.
 #
-# NOTE: ramp_rate=50 is required so the 4000-user step reaches full load within 5 min
-# (4000 / 50 = 80 s ramp, leaving ~4 min at steady state).
+# 10-minute steps: the first ~30 s of each step is JVM JIT warm-up noise.
+# 10 min gives ~9.5 min of steady-state data, making warm-up negligible.
+#
+# NOTE: ramp_rate=50 is required so the 4000-user step reaches full load within 80 s
+# (4000 / 50 = 80 s ramp), leaving ~8.5 min of steady state within the 10-min window.
 
 load_steps:
   users:    [10, 25, 50, 100, 200, 500, 1000, 2000, 4000]
-  duration: "5m"
+  duration: "10m"
   ramp_rate: 50           # users spawned per second (increased to handle 4 000-user steps)
   saturation:
     failure_rate_pct: 5   # stop if failure % exceeds this
@@ -29,19 +33,9 @@ experiments:
 
   # ── Phase 1: RAM sweep (2 vCPUs, vary RAM) ─────────────────────────────────
   # Goal: find minimum viable RAM and observe JVM OOM / swap / GC pressure.
-  # Note: 512 MB is below the JVM minimum heap for Quarkus — expect fast failure.
-
-  - label: "2cpu-512mb"
-    phase: 1
-    vcpus: 2
-    ram_mb: 512
-    disk_gb: 20
-
-  - label: "2cpu-1gb"
-    phase: 1
-    vcpus: 2
-    ram_mb: 1024
-    disk_gb: 20
+  # NOTE: 2cpu-512mb and 2cpu-1gb were tested and definitively failed — the Linux
+  # OOM killer terminates MySQL before InnoDB initialisation completes. They are
+  # excluded from the run matrix; the minimum viable floor is documented as > 1 GB.
 
   - label: "2cpu-2gb"
     phase: 1
