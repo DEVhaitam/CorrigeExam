@@ -320,13 +320,15 @@ def run_locust_step(
     duration: str,
     ramp_rate: int,
     run_dir: Path,
-) -> tuple[dict, float, float]:
+) -> tuple[dict, float, float, bool]:
     """
     Run one locust step.
 
-    Returns (parsed_stats, step_start_ts, step_end_ts).
-    The timestamps are used by the caller to query Prometheus for system metrics
-    covering exactly the duration of this step.
+    Returns (parsed_stats, step_start_ts, step_end_ts, hard_fail).
+    hard_fail=True means Locust exited non-zero (infra limit hit); the CSV
+    was still written so stats are available.  hard_fail=False is the normal
+    case (exit 0) or the threshold-saturation case (exit 1 + CSV present).
+    Raises RuntimeError only when Locust produced no CSV at all (startup failure).
     """
     csv_prefix = str(run_dir / f"u{users}")
     cmd = [
@@ -343,9 +345,13 @@ def run_locust_step(
     ]
     print(f"\n[locust] {config['label']} — {users} users × {duration}")
     t_start = time.time()
-    run(cmd)
+    result = run(cmd, check=False)   # exit 1 is normal when failures occur; check CSV instead
     t_end = time.time()
-    return parse_stats(Path(csv_prefix + "_stats.csv")), t_start, t_end
+    stats_path = Path(csv_prefix + "_stats.csv")
+    hard_fail = result.returncode != 0
+    if hard_fail and not stats_path.exists():
+        raise RuntimeError(f"Locust failed to produce output (exit {result.returncode})")
+    return parse_stats(stats_path), t_start, t_end, hard_fail
 
 
 def parse_stats(stats_csv: Path) -> dict:
@@ -437,11 +443,11 @@ def run_one_experiment(config: dict, exp_conf: dict, dry_run: bool = False) -> d
         time.sleep(SCRAPE_INTERVAL + 5)
 
         # 5 — Run load steps
-        thresholds    = exp_conf["load_steps"]["saturation"]
+        thresholds     = exp_conf["load_steps"]["saturation"]
         breaking_point = None
 
         for users in exp_conf["load_steps"]["users"]:
-            stats, t_start, t_end = run_locust_step(
+            stats, t_start, t_end, hard_fail = run_locust_step(
                 vm_ip=vm_ip,
                 config=config,
                 users=users,
@@ -449,7 +455,6 @@ def run_one_experiment(config: dict, exp_conf: dict, dry_run: bool = False) -> d
                 ramp_rate=exp_conf["load_steps"]["ramp_rate"],
                 run_dir=run_dir,
             )
-            summary["steps"].append({"users": users, **stats})
 
             # Collect system metrics from Prometheus for this step's time window
             collect_system_metrics(
@@ -459,15 +464,38 @@ def run_one_experiment(config: dict, exp_conf: dict, dry_run: bool = False) -> d
                 out_path=run_dir / f"u{users}_system.csv",
             )
 
-            if is_saturated(stats, thresholds):
+            saturated = not hard_fail and is_saturated(stats, thresholds)
+            status = (
+                "locust_error" if hard_fail
+                else "saturated" if saturated
+                else "ok"
+            )
+            summary["steps"].append({"users": users, "status": status, **stats})
+
+            if hard_fail:
+                summary["infra_failure_users"] = users
+                print(
+                    f"[locust] Hard infra failure at {users} users "
+                    f"(locust exit != 0, failure_rate={stats.get('failure_rate', '?'):.1%}, "
+                    f"p95={stats.get('p95_ms', '?'):.0f}ms) — stopping load ramp"
+                )
+                break
+
+            if saturated:
                 breaking_point = users
                 break
 
         summary["breaking_point_users"] = breaking_point
-        print(
-            f"\n[result] {label}: "
-            + (f"saturated at {breaking_point} users" if breaking_point else "no saturation up to max load")
+        limit = (
+            f"threshold saturation at {breaking_point} users" if breaking_point
+            else f"hard infra failure at {summary.get('infra_failure_users')} users"
+            if summary.get("infra_failure_users") else "no saturation up to max load"
         )
+        print(f"\n[result] {label}: {limit}")
+
+    except Exception as exc:
+        summary["error"] = str(exc)
+        print(f"[run_one_experiment] Unexpected error for {label}: {exc}")
 
     finally:
         # 6 — Always destroy, even on error
@@ -480,10 +508,10 @@ def run_one_experiment(config: dict, exp_conf: dict, dry_run: bool = False) -> d
         # Clear Prometheus targets so stale data doesn't confuse next run
         clear_prometheus_targets()
 
-    # 7 — Save summary
-    summary_file = run_dir / "summary.json"
-    summary_file.write_text(json.dumps(summary, indent=2))
-    print(f"[result] Summary → {summary_file}")
+        # 7 — Always save summary (partial data is still valuable)
+        summary_file = run_dir / "summary.json"
+        summary_file.write_text(json.dumps(summary, indent=2))
+        print(f"[result] Summary → {summary_file}")
 
     return summary
 
@@ -491,19 +519,27 @@ def run_one_experiment(config: dict, exp_conf: dict, dry_run: bool = False) -> d
 def print_comparison_table(summaries: list[dict]):
     if not summaries:
         return
-    print("\n" + "=" * 70)
+    print("\n" + "=" * 86)
     print("EXPERIMENT RESULTS SUMMARY")
-    print("=" * 70)
-    header = f"{'Config':<16} {'Break (users)':>14} {'Max p95 (ms)':>14} {'Max fail%':>10}"
+    print("=" * 86)
+    header = (
+        f"{'Config':<16} {'Threshold sat.':>15} {'Infra failure':>14}"
+        f" {'Max p95 (ms)':>13} {'Max fail%':>10}"
+    )
     print(header)
-    print("-" * 70)
+    print("-" * 86)
     for s in summaries:
-        steps = s.get("steps", [])
-        max_p95  = max((st.get("p95_ms", 0) for st in steps), default=0)
-        max_fail = max((st.get("failure_rate", 0) for st in steps), default=0) * 100
-        bp       = s.get("breaking_point_users") or "> max"
-        print(f"{s['label']:<16} {str(bp):>14} {max_p95:>14.0f} {max_fail:>9.1f}%")
-    print("=" * 70)
+        steps    = s.get("steps", [])
+        max_p95  = max((st.get("p95_ms", 0)       for st in steps), default=0)
+        max_fail = max((st.get("failure_rate", 0)  for st in steps), default=0) * 100
+        bp       = s.get("breaking_point_users")   or "—"
+        infra    = s.get("infra_failure_users")    or "—"
+        error    = " [ERROR]" if s.get("error") else ""
+        print(
+            f"{s['label'] + error:<16} {str(bp):>15} {str(infra):>14}"
+            f" {max_p95:>13.0f} {max_fail:>9.1f}%"
+        )
+    print("=" * 86)
 
 
 # ── CLI ───────────────────────────────────────────────────────────────────────
