@@ -145,7 +145,7 @@ def provision_vm(config: dict) -> str:
 
 def destroy_vm(label: str):
     print(f"\n[terraform] Destroying VM: {label} …")
-    tf("destroy", "-auto-approve", f"-var=vm_name={label}")
+    tf("destroy", "-auto-approve", "-lock=false", f"-var=vm_name={label}")
 
 
 # ── Prometheus target management ──────────────────────────────────────────────
@@ -305,7 +305,7 @@ def collect_system_metrics(vm_ip: str, start_ts: float, end_ts: float, out_path:
         w = csv.writer(fh)
         w.writerow(["timestamp"] + columns)
         for ts in sorted_ts:
-            row = [ts] + [series[col].get(ts, "") for col in columns]
+            row = [ts] + [series.get(col, {}).get(ts, "") for col in columns]
             w.writerow(row)
 
     print(f"  [system-metrics] {len(sorted_ts)} rows × {len(series)} metrics → {out_path.name}")
