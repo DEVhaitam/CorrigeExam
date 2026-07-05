@@ -89,7 +89,7 @@ def load_experiments() -> dict:
         return yaml.safe_load(f)
 
 
-def select_configs(conf: dict, label: str | None, phase: int | None) -> list[dict]:
+def select_configs(conf: dict, label: str | None, phase: int | None, skip: list[str] | None = None) -> list[dict]:
     all_configs = conf["experiments"]
     if label:
         matches = [c for c in all_configs if c["label"] == label]
@@ -98,8 +98,12 @@ def select_configs(conf: dict, label: str | None, phase: int | None) -> list[dic
             sys.exit(f"Config '{label}' not found. Available: {labels}")
         return matches
     if phase is not None:
-        return [c for c in all_configs if c.get("phase") == phase]
-    return all_configs
+        configs = [c for c in all_configs if c.get("phase") == phase]
+    else:
+        configs = all_configs
+    if skip:
+        configs = [c for c in configs if c["label"] not in skip]
+    return configs
 
 
 # ── Terraform ────────────────────────────────────────────────────────────────
@@ -554,11 +558,13 @@ def main():
     group.add_argument("--all",      action="store_true",  help="Run all experiments from experiments.yml")
     group.add_argument("--phase",    type=int, metavar="N", help="Run all Phase N experiments")
     parser.add_argument("--dry-run", action="store_true",  help="Print plan without running anything")
+    parser.add_argument("--skip",    metavar="LABEL", action="append", default=[],
+                        help="Skip a config label (repeatable: --skip 2cpu-2gb --skip 2cpu-4gb)")
 
     args = parser.parse_args()
 
     exp_conf = load_experiments()
-    configs  = select_configs(exp_conf, args.config, args.phase)
+    configs  = select_configs(exp_conf, args.config, args.phase, skip=args.skip)
 
     print(f"Experiments to run ({len(configs)}): {[c['label'] for c in configs]}")
     if args.dry_run:
