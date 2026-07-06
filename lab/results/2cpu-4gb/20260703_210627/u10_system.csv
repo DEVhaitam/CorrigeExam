@@ -1,0 +1,1 @@
+timestamp,cpu_pct,ram_used_bytes,ram_total_bytes,swap_used_bytes,swap_total_bytes,disk_read_bps,disk_write_bps,net_rx_bps,net_tx_bps,mysql_cpu_pct,mysql_mem_bytes,back_cpu_pct,back_mem_bytes,jvm_heap_bytes,jvm_nonheap_bytes,mysql_threads_connected,mysql_queries_per_sec,mysql_slow_queries
