@@ -1,0 +1,30 @@
+Method,Name,Error,Occurrences
+PUT,PUT /api/student-responses (grade),"CatchResponseError('grade failed 500: {""details"":""Error id e7fadfe9-0602-4003-9346-b43bc703552c-455"",""stack"":""""}')",1
+PUT,PUT /api/student-responses (grade),"CatchResponseError('grade failed 500: {""details"":""Error id e7fadfe9-0602-4003-9346-b43bc703552c-433"",""stack"":""""}')",1
+GET,GET /api/students,CatchResponseError('status 500'),5
+PUT,PUT /api/student-responses (grade),"CatchResponseError('grade failed 500: {""details"":""Error id e7fadfe9-0602-4003-9346-b43bc703552c-383"",""stack"":""""}')",1
+GET,GET /api/exam-sheets,CatchResponseError('status 500'),7
+GET,GET /api/exams/{id},CatchResponseError('status 500'),10
+PUT,PUT /api/student-responses (grade),"CatchResponseError('grade failed 500: {""details"":""Error id e7fadfe9-0602-4003-9346-b43bc703552c-450"",""stack"":""""}')",1
+GET,GET /api/courses,CatchResponseError('status 500'),15
+PUT,PUT /api/student-responses (grade),"CatchResponseError('grade failed 500: {""details"":""Error id e7fadfe9-0602-4003-9346-b43bc703552c-410"",""stack"":""""}')",1
+GET,GET /api/exams,CatchResponseError('status 500'),9
+PUT,PUT /api/student-responses (grade),"CatchResponseError('grade failed 500: {""details"":""Error id e7fadfe9-0602-4003-9346-b43bc703552c-425"",""stack"":""""}')",1
+PUT,PUT /api/student-responses (grade),"CatchResponseError('grade failed 500: {""details"":""Error id e7fadfe9-0602-4003-9346-b43bc703552c-390"",""stack"":""""}')",1
+PUT,PUT /api/student-responses (grade),"CatchResponseError('grade failed 500: {""details"":""Error id e7fadfe9-0602-4003-9346-b43bc703552c-409"",""stack"":""""}')",1
+GET,GET /api/questions,CatchResponseError('status 500'),10
+PUT,PUT /api/student-responses (grade),"CatchResponseError('grade failed 500: {""details"":""Error id e7fadfe9-0602-4003-9346-b43bc703552c-430"",""stack"":""""}')",1
+PUT,PUT /api/student-responses (grade),"CatchResponseError('grade failed 500: {""details"":""Error id e7fadfe9-0602-4003-9346-b43bc703552c-398"",""stack"":""""}')",1
+GET,GET /api/student-responses,CatchResponseError('status 500'),4
+PUT,PUT /api/student-responses (grade),"CatchResponseError('grade failed 500: {""details"":""Error id e7fadfe9-0602-4003-9346-b43bc703552c-458"",""stack"":""""}')",1
+PUT,PUT /api/student-responses (grade),"CatchResponseError('grade failed 500: {""details"":""Error id e7fadfe9-0602-4003-9346-b43bc703552c-454"",""stack"":""""}')",1
+PUT,PUT /api/student-responses (grade),"CatchResponseError('grade failed 500: {""details"":""Error id e7fadfe9-0602-4003-9346-b43bc703552c-407"",""stack"":""""}')",1
+PUT,PUT /api/student-responses (grade),"CatchResponseError('grade failed 500: {""details"":""Error id e7fadfe9-0602-4003-9346-b43bc703552c-418"",""stack"":""""}')",1
+PUT,PUT /api/student-responses (grade),"CatchResponseError('grade failed 500: {""details"":""Error id e7fadfe9-0602-4003-9346-b43bc703552c-387"",""stack"":""""}')",1
+GET,GET /api/questions (switch),CatchResponseError('status 500'),4
+PUT,PUT /api/student-responses (grade),"CatchResponseError('grade failed 500: {""details"":""Error id e7fadfe9-0602-4003-9346-b43bc703552c-408"",""stack"":""""}')",1
+PUT,PUT /api/student-responses (grade),"CatchResponseError('grade failed 500: {""details"":""Error id e7fadfe9-0602-4003-9346-b43bc703552c-456"",""stack"":""""}')",1
+PUT,PUT /api/student-responses (grade),"CatchResponseError('grade failed 500: {""details"":""Error id e7fadfe9-0602-4003-9346-b43bc703552c-419"",""stack"":""""}')",1
+PUT,PUT /api/student-responses (grade),"CatchResponseError('grade failed 500: {""details"":""Error id e7fadfe9-0602-4003-9346-b43bc703552c-396"",""stack"":""""}')",1
+GET,GET /api/exam-sheets (progress),CatchResponseError('status 500'),3
+GET,GET /api/final-results,CatchResponseError('status 500'),3

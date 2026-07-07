@@ -1,0 +1,63 @@
+{
+  "label": "1cpu-4gb",
+  "run_id": "20260707_163128",
+  "steps": [
+    {
+      "users": 10,
+      "status": "ok",
+      "total": 2770,
+      "failures": 0,
+      "failure_rate": 0.0,
+      "p95_ms": 69.0,
+      "rps": 4.6260456160374686
+    },
+    {
+      "users": 25,
+      "status": "ok",
+      "total": 6904,
+      "failures": 0,
+      "failure_rate": 0.0,
+      "p95_ms": 66.0,
+      "rps": 11.514751322261526
+    },
+    {
+      "users": 50,
+      "status": "ok",
+      "total": 13731,
+      "failures": 0,
+      "failure_rate": 0.0,
+      "p95_ms": 71.0,
+      "rps": 22.916405766883017
+    },
+    {
+      "users": 100,
+      "status": "ok",
+      "total": 27067,
+      "failures": 0,
+      "failure_rate": 0.0,
+      "p95_ms": 76.0,
+      "rps": 45.16065808651066
+    },
+    {
+      "users": 200,
+      "status": "ok",
+      "total": 52076,
+      "failures": 0,
+      "failure_rate": 0.0,
+      "p95_ms": 140.0,
+      "rps": 86.85177774796828
+    },
+    {
+      "users": 500,
+      "status": "locust_error",
+      "total": 86752,
+      "failures": 89,
+      "failure_rate": 0.0010259129472519365,
+      "p95_ms": 2600.0,
+      "rps": 144.6369867929744
+    }
+  ],
+  "provision_s": 95,
+  "infra_failure_users": 500,
+  "breaking_point_users": null
+}
