@@ -226,18 +226,20 @@ _SYSTEM_METRICS: dict[str, str] = {
         "sum(rate(node_network_transmit_bytes_total"
         "{{instance='{ip}:9100', device!='lo'}}[1m]))",
     # ── Container-level (cadvisor) ────────────────────────────────────────────
+    # name=~ handles both 'correctexam-mysql' and '/correctexam-mysql' (cadvisor
+    # versions differ on whether they prefix container names with a slash).
     "mysql_cpu_pct":
         "100 * rate(container_cpu_usage_seconds_total"
-        "{{instance='{ip}:8081', name='correctexam-mysql'}}[1m])",
+        "{{instance='{ip}:8081', name=~'/?correctexam-mysql'}}[1m])",
     "mysql_mem_bytes":
         "container_memory_usage_bytes"
-        "{{instance='{ip}:8081', name='correctexam-mysql'}}",
+        "{{instance='{ip}:8081', name=~'/?correctexam-mysql'}}",
     "back_cpu_pct":
         "100 * rate(container_cpu_usage_seconds_total"
-        "{{instance='{ip}:8081', name='correctexam-back'}}[1m])",
+        "{{instance='{ip}:8081', name=~'/?correctexam-back'}}[1m])",
     "back_mem_bytes":
         "container_memory_usage_bytes"
-        "{{instance='{ip}:8081', name='correctexam-back'}}",
+        "{{instance='{ip}:8081', name=~'/?correctexam-back'}}",
     # ── Application (Quarkus JVM via Micrometer/Prometheus) ──────────────────
     "jvm_heap_bytes":
         "sum(jvm_memory_used_bytes{{instance='{ip}:9091', area='heap'}})",
