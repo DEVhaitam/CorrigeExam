@@ -164,9 +164,11 @@ services:
     ports:
       - "8081:8080"    # 8081 on host to avoid clash with front (:8080)
     volumes:
-      - /var/run:/var/run:ro
+      - /:/rootfs:ro                          # cadvisor needs rootfs to find container FSes
+      - /var/run:/var/run:rw                  # rw required — cadvisor writes to docker.sock to discover containers
       - /sys:/sys:ro
       - /var/lib/docker:/var/lib/docker:ro
+      - /dev/kmsg:/dev/kmsg                   # required on kernel 5.x+ for accurate CPU accounting
     restart: unless-stopped
 
 networks:

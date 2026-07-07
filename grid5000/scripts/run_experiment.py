@@ -1,45 +1,46 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 """
-run_experiment.py — Orchestrate one or all Grid5000 provisioning experiments.
+run_experiment.py — Orchestrate Grid5000 provisioning experiments (parallel-capable).
 
 Runs ON the bare-metal node (not from the laptop).
 
 What it does per experiment config:
-  1. Terraform apply  → provision a KVM VM with the specified RAM/vCPU
-  2. ansible deploy_app.yml  → copy docker-compose + seed files, start the app
-  3. ansible seed_db.yml     → import test data so the DB is populated
-  4. Update Prometheus targets to point at the VM IP
-  5. Locust           → run s03_mixed at increasing user counts until saturation
-  6. Terraform destroy → clean up the VM
-  7. Save results to lab/results/<config>/<run_id>/
-
-Results directory layout per run:
-  lab/results/
-    <config>/           e.g. 2cpu-4gb/
-      <run_id>/         e.g. 20260702_135946/
-        u10_stats.csv
-        u10_stats_history.csv
-        u10_failures.csv
-        u10_exceptions.csv
-        u10.html
-        u10_system.csv      ← VM system metrics (CPU, RAM, disk, net, …) from Prometheus
-        u25_stats.csv
-        …
-        summary.json
+  1. Terraform apply  → provision a KVM VM (per-config state file, no conflicts)
+  2. virsh vcpupin    → pin VM vCPUs to isolated host CPUs (parallel isolation)
+  3. ansible deploy_app.yml  → copy docker-compose + seed files, start the app
+  4. ansible seed_db.yml     → import test data so the DB is populated
+  5. Update Prometheus targets (per-config files: vm_<label>_node.json, …)
+  6. Locust           → run s03_mixed at increasing user counts until saturation
+                        Retries transient failures up to --retry times
+  7. Terraform destroy → clean up the VM, release CPU slot
+  8. Save results to lab/results/<config>/<run_id>/
 
 Usage:
-  # Run a single experiment config:
+  # Single config:
   python3 grid5000/scripts/run_experiment.py --config 2cpu-4gb
 
-  # Run ALL experiments from experiments.yml in order:
-  python3 grid5000/scripts/run_experiment.py --all
+  # All configs, up to 3 in parallel:
+  python3 grid5000/scripts/run_experiment.py --all --parallel 3
 
-  # Run only Phase 1 configs:
-  python3 grid5000/scripts/run_experiment.py --phase 1
+  # Phase 1 only, skip already-done configs:
+  python3 grid5000/scripts/run_experiment.py --phase 1 --skip 2cpu-4gb --parallel 2
 
-  # Dry-run — print what would happen without actually running:
-  python3 grid5000/scripts/run_experiment.py --all --dry-run
+  # Dry-run:
+  python3 grid5000/scripts/run_experiment.py --all --parallel 3 --dry-run
+
+CPU isolation (parallel mode):
+  Host CPUs 0–(LOCUST_CPU_END) are reserved for the OS, monitoring, and Locust.
+  Host CPUs (VM_CPU_START)–(HOST_TOTAL_CPUS-1) are dynamically allocated to VMs.
+  Each VM gets exactly vcpus host CPUs pinned via virsh vcpupin.
+  Locust is pinned to the OS range via taskset.
+
+Results layout:
+  lab/results/<config>/<run_id>/
+    u<N>_stats.csv
+    u<N>_stats_history.csv
+    u<N>_system.csv    ← VM metrics from Prometheus
+    summary.json
 """
 
 import argparse
@@ -48,40 +49,92 @@ import json
 import os
 import subprocess
 import sys
+import threading
 import time
 import urllib.parse
 import urllib.request
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
 
 import yaml
 
-REPO_ROOT    = Path(__file__).resolve().parents[2]
-TF_DIR       = REPO_ROOT / "grid5000" / "terraform"
-ANSIBLE_DIR  = REPO_ROOT / "ansible"
-INVENTORY    = ANSIBLE_DIR / "inventory" / "dynamic.py"
-TARGETS_DIR  = REPO_ROOT / "grid5000" / "monitoring" / "targets"
-RESULTS_DIR  = REPO_ROOT / "lab" / "results"
-SCENARIOS    = REPO_ROOT / "lab" / "scenarios"
-EXPERIMENTS  = REPO_ROOT / "grid5000" / "experiments.yml"
+# ── paths ──────────────────────────────────────────────────────────────────────
+REPO_ROOT   = Path(__file__).resolve().parents[2]
+TF_DIR      = REPO_ROOT / "grid5000" / "terraform"
+ANSIBLE_DIR = REPO_ROOT / "ansible"
+INVENTORY   = ANSIBLE_DIR / "inventory" / "dynamic.py"
+TARGETS_DIR = REPO_ROOT / "grid5000" / "monitoring" / "targets"
+RESULTS_DIR = REPO_ROOT / "lab" / "results"
+SCENARIOS   = REPO_ROOT / "lab" / "scenarios"
+EXPERIMENTS = REPO_ROOT / "grid5000" / "experiments.yml"
 
 PROMETHEUS_URL  = "http://localhost:9092"
-SCRAPE_INTERVAL = 15  # seconds — matches prometheus.yml global.scrape_interval
+SCRAPE_INTERVAL = 15  # seconds
 
-# When run via `sudo python3 ...`, Path.home() is /root but the key lives in the
-# G5K user's NFS home. SUDO_USER is set by sudo to the original caller.
+# CPU layout on the bare-metal node
+HOST_TOTAL_CPUS = 32   # parasilo nodes: 32 physical cores
+VM_CPU_START    = 8    # CPUs 0-7 → OS + monitoring + Locust
+LOCUST_CPU_MASK = "0-7"  # taskset argument for Locust processes
+
 _sudo_user = os.environ.get("SUDO_USER")
 SSH_KEY = (Path("/home") / _sudo_user if _sudo_user else Path.home()) / ".ssh" / "id_rsa"
 
+# ── thread-safe logging ────────────────────────────────────────────────────────
+_print_lock = threading.Lock()
 
-# ── helpers ──────────────────────────────────────────────────────────────────
+def log(label: str, msg: str):
+    with _print_lock:
+        print(f"[{label}] {msg}", flush=True)
 
-def run(cmd: list[str], check=True, capture=False, **kw) -> subprocess.CompletedProcess:
-    print(f"  $ {' '.join(str(c) for c in cmd)}")
-    return subprocess.run(
-        cmd, check=check, capture_output=capture, text=True, **kw
-    )
+
+# ── CPU slot pool ──────────────────────────────────────────────────────────────
+
+class CpuSlotPool:
+    """
+    Thread-safe allocator of non-overlapping host CPU ranges for VM pinning.
+
+    The pool covers CPUs VM_CPU_START … HOST_TOTAL_CPUS-1.
+    Each VM acquires 'vcpus' CPUs on provision and releases them on destroy.
+    When parallel=1 (sequential mode) pinning is skipped entirely.
+    """
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._free: list[int] = list(range(VM_CPU_START, HOST_TOTAL_CPUS))
+
+    def acquire(self, n: int, label: str) -> list[int]:
+        with self._lock:
+            if len(self._free) < n:
+                raise RuntimeError(
+                    f"[{label}] CPU slot pool exhausted "
+                    f"(need {n} CPUs, only {len(self._free)} left: {self._free}). "
+                    f"Reduce --parallel or wait for a running experiment to finish."
+                )
+            slot = self._free[:n]
+            self._free = self._free[n:]
+            return slot
+
+    def release(self, cpus: list[int]):
+        with self._lock:
+            self._free = sorted(self._free + cpus)
+
+    def available(self) -> int:
+        with self._lock:
+            return len(self._free)
+
+
+_cpu_pool = CpuSlotPool()
+
+
+# ── helpers ────────────────────────────────────────────────────────────────────
+
+def run(cmd: list[str], check=True, capture=False, label: str = "", **kw) -> subprocess.CompletedProcess:
+    prefix = f"[{label}] " if label else ""
+    with _print_lock:
+        print(f"{prefix}  $ {' '.join(str(c) for c in cmd)}", flush=True)
+    return subprocess.run(cmd, check=check, capture_output=capture, text=True, **kw)
 
 
 def load_experiments() -> dict:
@@ -89,7 +142,8 @@ def load_experiments() -> dict:
         return yaml.safe_load(f)
 
 
-def select_configs(conf: dict, label: str | None, phase: int | None, skip: list[str] | None = None) -> list[dict]:
+def select_configs(conf: dict, label: str | None, phase: int | None,
+                   skip: list[str] | None = None) -> list[dict]:
     all_configs = conf["experiments"]
     if label:
         matches = [c for c in all_configs if c["label"] == label]
@@ -106,102 +160,141 @@ def select_configs(conf: dict, label: str | None, phase: int | None, skip: list[
     return configs
 
 
-# ── Terraform ────────────────────────────────────────────────────────────────
+# ── Terraform ──────────────────────────────────────────────────────────────────
 
-def tf(*args, capture=False) -> subprocess.CompletedProcess:
-    return run(["terraform", *args], cwd=TF_DIR, capture=capture)
+def tf(*args, label: str, capture=False) -> subprocess.CompletedProcess:
+    """Run terraform with a per-config state file so parallel runs don't collide."""
+    state_file = str(TF_DIR / f"{label}.tfstate")
+    return run(
+        ["terraform", f"-state={state_file}", *args],
+        cwd=TF_DIR, capture=capture, label=label,
+    )
 
 
 def _virsh_cleanup(label: str):
-    """Remove any stale libvirt domain and its volumes before a fresh apply.
-
-    Terraform tracks state separately from libvirt. If a previous apply failed
-    after defining the domain (e.g. QEMU crashed, AppArmor blocked the image),
-    the domain sits in libvirt as "shut off" but is absent from tfstate.  The
-    next apply then fails with "domain already exists".  Pre-cleaning libvirt
-    makes provision_vm idempotent across failures.
-    """
-    subprocess.run(["virsh", "destroy", label],  capture_output=True)
+    """Remove any stale libvirt domain and its volumes before a fresh apply."""
+    subprocess.run(["virsh", "destroy",  label], capture_output=True)
     subprocess.run(["virsh", "undefine", label], capture_output=True)
     for suffix in ("-disk.qcow2", "-cloudinit.iso"):
-        subprocess.run(["virsh", "vol-delete", f"{label}{suffix}", "--pool", "default"],
-                       capture_output=True)
+        subprocess.run(
+            ["virsh", "vol-delete", f"{label}{suffix}", "--pool", "default"],
+            capture_output=True,
+        )
 
 
-def provision_vm(config: dict) -> str:
-    """Apply Terraform for the given config, return the VM IP."""
+def _pin_vm_cpus(label: str, vcpus: int, host_cpus: list[int]):
+    """Pin each VM vCPU to an isolated host CPU via virsh vcpupin."""
+    log(label, f"CPU pinning: vCPUs {list(range(vcpus))} → host CPUs {host_cpus}")
+    for vcpu_id, host_cpu in enumerate(host_cpus[:vcpus]):
+        result = subprocess.run(
+            ["virsh", "vcpupin", label, str(vcpu_id), str(host_cpu)],
+            capture_output=True, text=True,
+        )
+        if result.returncode != 0:
+            log(label, f"  vcpupin warning (vCPU {vcpu_id} → host {host_cpu}): {result.stderr.strip()}")
+
+
+def provision_vm(config: dict, parallel: bool) -> tuple[str, list[int]]:
+    """
+    Apply Terraform for the given config.
+
+    Returns (vm_ip, allocated_host_cpus).
+    In parallel mode, acquires CPU slots from the pool and pins the VM.
+    In sequential mode, returns an empty cpu list (no pinning needed).
+    """
     label = config["label"]
-    print(f"\n[terraform] Provisioning VM: {label} "
-          f"({config['vcpus']} vCPU, {config['ram_mb']} MB RAM) …")
-    _virsh_cleanup(label)  # remove stale domain/volumes so apply starts clean
+    log(label, f"Provisioning VM ({config['vcpus']} vCPU, {config['ram_mb']} MB RAM) …")
+    _virsh_cleanup(label)
+
     tf("apply", "-auto-approve", "-lock=false",
        f"-var=vm_name={label}",
        f"-var=vm_vcpus={config['vcpus']}",
        f"-var=vm_ram_mb={config['ram_mb']}",
        f"-var=vm_disk_gb={config.get('disk_gb', 20)}",
        f"-var=ssh_public_key_path={SSH_KEY}.pub",
+       label=label,
     )
-    result = tf("output", "-raw", "vm_ip", capture=True)
+    result = tf("output", "-raw", "vm_ip", label=label, capture=True)
     vm_ip = result.stdout.strip()
-    print(f"[terraform] VM IP: {vm_ip}")
-    return vm_ip
+    log(label, f"VM IP: {vm_ip}")
+
+    host_cpus: list[int] = []
+    if parallel:
+        host_cpus = _cpu_pool.acquire(config["vcpus"], label)
+        _pin_vm_cpus(label, config["vcpus"], host_cpus)
+
+    return vm_ip, host_cpus
 
 
-def destroy_vm(label: str):
-    print(f"\n[terraform] Destroying VM: {label} …")
-    tf("destroy", "-auto-approve", "-lock=false", f"-var=vm_name={label}")
+def destroy_vm(label: str, host_cpus: list[int]):
+    log(label, "Destroying VM …")
+    try:
+        tf("destroy", "-auto-approve", "-lock=false",
+           f"-var=vm_name={label}", label=label)
+    finally:
+        if host_cpus:
+            _cpu_pool.release(host_cpus)
+            log(label, f"Released host CPUs {host_cpus} back to pool "
+                f"({_cpu_pool.available()} free)")
 
 
-# ── Prometheus target management ──────────────────────────────────────────────
+# ── Prometheus target management ───────────────────────────────────────────────
+# Per-config target files: vm_<label>_node.json, vm_<label>_cadvisor.json, …
+# prometheus.yml uses glob patterns (vm_*_node.json) to pick them all up.
 
-def _write_target(filename: str, ip_port: str, labels: dict):
-    entry = [{"targets": [ip_port], "labels": labels}]
-    (TARGETS_DIR / filename).write_text(json.dumps(entry, indent=2))
+def _target_files(label: str) -> dict[str, str]:
+    return {
+        "node":     f"vm_{label}_node.json",
+        "cadvisor": f"vm_{label}_cadvisor.json",
+        "app":      f"vm_{label}_app.json",
+        "mysql":    f"vm_{label}_mysql.json",
+    }
 
 
 def update_prometheus_targets(config: dict, vm_ip: str):
-    """Write 4 target files (one per scrape endpoint) and reload Prometheus."""
     TARGETS_DIR.mkdir(parents=True, exist_ok=True)
+    label  = config["label"]
     labels = {
-        "config": config["label"],
+        "config": label,
         "vcpus":  str(config["vcpus"]),
         "ram_mb": str(config["ram_mb"]),
         "phase":  str(config.get("phase", "?")),
     }
-    # VM host port → Prometheus job mapping (from vm-docker-compose.yml)
-    _write_target("vm_node.json",     f"{vm_ip}:9100", labels)
-    _write_target("vm_cadvisor.json", f"{vm_ip}:8081", labels)
-    _write_target("vm_app.json",      f"{vm_ip}:9091", labels)
-    _write_target("vm_mysql.json",    f"{vm_ip}:9104", labels)
-    print(f"[prometheus] 4 target files written → {vm_ip}  (config: {config['label']})")
-
-    try:
-        req = urllib.request.Request(
-            f"{PROMETHEUS_URL}/-/reload", method="POST", data=b""
+    files = _target_files(label)
+    entries = {
+        files["node"]:     f"{vm_ip}:9100",
+        files["cadvisor"]: f"{vm_ip}:8081",
+        files["app"]:      f"{vm_ip}:9091",
+        files["mysql"]:    f"{vm_ip}:9104",
+    }
+    for fname, target in entries.items():
+        (TARGETS_DIR / fname).write_text(
+            json.dumps([{"targets": [target], "labels": labels}], indent=2)
         )
+    log(label, f"Prometheus targets written for {vm_ip}")
+    _prometheus_reload()
+
+
+def clear_prometheus_targets(label: str):
+    """Reset this config's target files to [] so a destroyed VM stops being scraped."""
+    for fname in _target_files(label).values():
+        path = TARGETS_DIR / fname
+        path.write_text("[]")
+
+
+def _prometheus_reload():
+    try:
+        req = urllib.request.Request(f"{PROMETHEUS_URL}/-/reload", method="POST", data=b"")
         urllib.request.urlopen(req, timeout=5)
-        print("[prometheus] Reload triggered")
     except Exception as exc:
-        print(f"[prometheus] Reload request failed (non-fatal): {exc}")
+        with _print_lock:
+            print(f"[prometheus] Reload request failed (non-fatal): {exc}", flush=True)
 
 
-def clear_prometheus_targets():
-    """Reset all target files to empty so stale VMs don't appear in Prometheus."""
-    for name in ("vm_node.json", "vm_cadvisor.json", "vm_app.json", "vm_mysql.json"):
-        (TARGETS_DIR / name).write_text("[]")
+# ── System metrics collection ──────────────────────────────────────────────────
 
-
-# ── System metrics collection (Prometheus) ────────────────────────────────────
-
-# Prometheus PromQL templates for per-VM system metrics.
-# {ip} is replaced at call time with the VM's IP address.
-# Exporter ports must match vm-docker-compose.yml:
-#   node-exporter → VM:9100
-#   cadvisor      → VM:8081
-#   app metrics   → VM:9091  (Quarkus management)
-#   mysqld-exporter → VM:9104
 _SYSTEM_METRICS: dict[str, str] = {
-    # ── VM-level (node-exporter) ──────────────────────────────────────────────
+    # VM-level (node-exporter)
     "cpu_pct":
         "100 * (1 - avg(rate(node_cpu_seconds_total"
         "{{instance='{ip}:9100', mode='idle'}}[1m])))",
@@ -225,9 +318,7 @@ _SYSTEM_METRICS: dict[str, str] = {
     "net_tx_bps":
         "sum(rate(node_network_transmit_bytes_total"
         "{{instance='{ip}:9100', device!='lo'}}[1m]))",
-    # ── Container-level (cadvisor) ────────────────────────────────────────────
-    # name=~ handles both 'correctexam-mysql' and '/correctexam-mysql' (cadvisor
-    # versions differ on whether they prefix container names with a slash).
+    # Container-level (cadvisor) — name=~ handles /name and name variants
     "mysql_cpu_pct":
         "100 * rate(container_cpu_usage_seconds_total"
         "{{instance='{ip}:8081', name=~'/?correctexam-mysql'}}[1m])",
@@ -240,12 +331,12 @@ _SYSTEM_METRICS: dict[str, str] = {
     "back_mem_bytes":
         "container_memory_usage_bytes"
         "{{instance='{ip}:8081', name=~'/?correctexam-back'}}",
-    # ── Application (Quarkus JVM via Micrometer/Prometheus) ──────────────────
+    # JVM (Quarkus Micrometer)
     "jvm_heap_bytes":
         "sum(jvm_memory_used_bytes{{instance='{ip}:9091', area='heap'}})",
     "jvm_nonheap_bytes":
         "sum(jvm_memory_used_bytes{{instance='{ip}:9091', area='nonheap'}})",
-    # ── MySQL (mysqld-exporter) ───────────────────────────────────────────────
+    # MySQL (mysqld-exporter)
     "mysql_threads_connected":
         "mysql_global_status_threads_connected{{instance='{ip}:9104'}}",
     "mysql_queries_per_sec":
@@ -256,7 +347,6 @@ _SYSTEM_METRICS: dict[str, str] = {
 
 
 def _prom_range(query: str, start: float, end: float) -> list[tuple[float, float]]:
-    """Query Prometheus range API. Returns [(unix_ts, value), …] or []."""
     params = urllib.parse.urlencode({
         "query": query,
         "start": str(int(start)),
@@ -274,7 +364,6 @@ def _prom_range(query: str, start: float, end: float) -> list[tuple[float, float
             return []
         if len(results) == 1:
             return [(float(ts), float(v)) for ts, v in results[0]["values"]]
-        # Multiple series returned (e.g. pre-aggregated sum) — sum across series
         acc: dict[float, float] = defaultdict(float)
         for series in results:
             for ts, v in series["values"]:
@@ -284,40 +373,33 @@ def _prom_range(query: str, start: float, end: float) -> list[tuple[float, float
         return []
 
 
-def collect_system_metrics(vm_ip: str, start_ts: float, end_ts: float, out_path: Path):
-    """
-    Query Prometheus for all system metrics over [start_ts, end_ts] and save to CSV.
-
-    Output format: wide CSV, one row per 15-second scrape tick, one column per metric.
-    Non-fatal: logs a warning and skips if Prometheus is unreachable or returns no data.
-    """
+def collect_system_metrics(vm_ip: str, start_ts: float, end_ts: float,
+                           out_path: Path, label: str = ""):
     series: dict[str, dict[float, float]] = {}
     all_ts: set[float] = set()
 
     for name, tmpl in _SYSTEM_METRICS.items():
-        query = tmpl.format(ip=vm_ip)
-        pts = _prom_range(query, start_ts, end_ts)
+        pts = _prom_range(tmpl.format(ip=vm_ip), start_ts, end_ts)
         if pts:
             series[name] = dict(pts)
             all_ts.update(ts for ts, _ in pts)
 
     if not series:
-        print("  [system-metrics] No data from Prometheus (not running or no data yet); skipping.")
+        log(label, "No system metrics from Prometheus — skipping.")
         return
 
     sorted_ts = sorted(all_ts)
-    columns   = list(_SYSTEM_METRICS.keys())   # consistent column order
+    columns   = list(_SYSTEM_METRICS.keys())
     with open(out_path, "w", newline="") as fh:
         w = csv.writer(fh)
         w.writerow(["timestamp"] + columns)
         for ts in sorted_ts:
-            row = [ts] + [series.get(col, {}).get(ts, "") for col in columns]
-            w.writerow(row)
+            w.writerow([ts] + [series.get(col, {}).get(ts, "") for col in columns])
 
-    print(f"  [system-metrics] {len(sorted_ts)} rows × {len(series)} metrics → {out_path.name}")
+    log(label, f"{len(sorted_ts)} rows × {len(series)} metrics → {out_path.name}")
 
 
-# ── Locust ────────────────────────────────────────────────────────────────────
+# ── Locust ─────────────────────────────────────────────────────────────────────
 
 def run_locust_step(
     vm_ip: str,
@@ -326,18 +408,25 @@ def run_locust_step(
     duration: str,
     ramp_rate: int,
     run_dir: Path,
+    max_retries: int,
+    parallel: bool,
 ) -> tuple[dict, float, float, bool]:
     """
-    Run one locust step.
+    Run one Locust load step, retrying on transient failure.
 
-    Returns (parsed_stats, step_start_ts, step_end_ts, hard_fail).
-    hard_fail=True means Locust exited non-zero (infra limit hit); the CSV
-    was still written so stats are available.  hard_fail=False is the normal
-    case (exit 0) or the threshold-saturation case (exit 1 + CSV present).
-    Raises RuntimeError only when Locust produced no CSV at all (startup failure).
+    Returns (stats, t_start, t_end, hard_fail).
+    hard_fail=True only when ALL attempts (1 + max_retries) produced a non-zero
+    exit AND a CSV was produced (i.e. it looked like a real capacity issue every time).
+    Raises RuntimeError if Locust fails to produce any output.
     """
+    label      = config["label"]
     csv_prefix = str(run_dir / f"u{users}")
+
+    # Pin Locust to OS CPUs in parallel mode so it doesn't compete with VMs.
+    taskset_prefix = ["taskset", "-c", LOCUST_CPU_MASK] if parallel else []
+
     cmd = [
+        *taskset_prefix,
         "locust",
         "-f", str(SCENARIOS / "s03_mixed.py"),
         "--host", f"http://{vm_ip}:8082",
@@ -349,19 +438,53 @@ def run_locust_step(
         "--html", f"{csv_prefix}.html",
         "--loglevel", "WARNING",
     ]
-    print(f"\n[locust] {config['label']} — {users} users × {duration}")
-    t_start = time.time()
-    result = run(cmd, check=False)   # exit 1 is normal when failures occur; check CSV instead
-    t_end = time.time()
+
     stats_path = Path(csv_prefix + "_stats.csv")
-    hard_fail = result.returncode != 0
-    if hard_fail and not stats_path.exists():
-        raise RuntimeError(f"Locust failed to produce output (exit {result.returncode})")
-    return parse_stats(stats_path), t_start, t_end, hard_fail
+    attempts   = 1 + max_retries
+
+    for attempt in range(1, attempts + 1):
+        log(label, f"Locust {users} users × {duration}"
+            + (f" (retry {attempt - 1}/{max_retries})" if attempt > 1 else ""))
+        t_start = time.time()
+        result  = run(cmd, check=False, label=label)
+        t_end   = time.time()
+
+        hard_fail = result.returncode != 0
+
+        if hard_fail and not stats_path.exists():
+            if attempt < attempts:
+                log(label, f"  Locust produced no output (exit {result.returncode}), "
+                    f"retrying in 30 s …")
+                time.sleep(30)
+                continue
+            raise RuntimeError(
+                f"Locust failed to produce output after {attempts} attempt(s) "
+                f"(exit {result.returncode})"
+            )
+
+        if hard_fail and attempt < attempts:
+            stats = parse_stats(stats_path)
+            log(label, f"  Locust exited {result.returncode} at {users} users "
+                f"(failure_rate={stats.get('failure_rate', '?'):.2%}, "
+                f"p95={stats.get('p95_ms', '?'):.0f} ms). "
+                f"Retrying in 30 s …")
+            time.sleep(30)
+            # Remove the old CSV so the retry starts clean
+            for suffix in ("_stats.csv", "_stats_history.csv",
+                           "_failures.csv", "_exceptions.csv"):
+                p = run_dir / f"u{users}{suffix}"
+                if p.exists():
+                    p.unlink()
+            continue
+
+        # Success or final attempt
+        return parse_stats(stats_path), t_start, t_end, hard_fail
+
+    # Should not reach here
+    return parse_stats(stats_path), t_start, t_end, True  # type: ignore[return-value]
 
 
 def parse_stats(stats_csv: Path) -> dict:
-    """Return aggregated row from a locust stats CSV."""
     if not stats_csv.exists():
         return {}
     with open(stats_csv) as f:
@@ -387,68 +510,74 @@ def is_saturated(stats: dict, thresholds: dict) -> bool:
     p95_threshold  = thresholds["p95_ms"]
     sat = stats["failure_rate"] > fail_threshold or stats["p95_ms"] > p95_threshold
     if sat:
-        print(
-            f"[locust] SATURATION DETECTED — "
-            f"failure_rate={stats['failure_rate']:.1%}, "
-            f"p95={stats['p95_ms']:.0f}ms"
-        )
+        with _print_lock:
+            print(
+                f"  SATURATION — "
+                f"failure_rate={stats['failure_rate']:.1%}, "
+                f"p95={stats['p95_ms']:.0f} ms",
+                flush=True,
+            )
     return sat
 
 
-# ── Experiment runner ─────────────────────────────────────────────────────────
+# ── Experiment runner ──────────────────────────────────────────────────────────
 
-def run_one_experiment(config: dict, exp_conf: dict, dry_run: bool = False) -> dict:
+def run_one_experiment(config: dict, exp_conf: dict,
+                       dry_run: bool = False,
+                       max_retries: int = 2,
+                       parallel: bool = False) -> dict:
     """
     Full cycle for one VM config:
-      provision → deploy → seed → load steps → destroy.
-    Returns a summary dict.
+      provision → pin CPUs → deploy → seed → load steps → destroy.
+
+    Always returns a summary dict; errors are captured inside it.
+    Destroys the VM and saves summary.json even if something fails mid-run.
     """
     label  = config["label"]
     run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
-
-    # Each run gets its own directory: lab/results/<config>/<run_id>/
     run_dir = RESULTS_DIR / label / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
 
     summary = {"label": label, "run_id": run_id, "steps": []}
 
     if dry_run:
-        print(f"[dry-run] Would run experiment: {label}  →  {run_dir}")
+        log(label, f"[dry-run] Would run → {run_dir}")
         return summary
 
-    vm_ip = None
+    vm_ip: str | None = None
+    host_cpus: list[int] = []
+
     try:
-        # 1 — Provision VM
+        # 1 — Provision VM (+ CPU pinning in parallel mode)
         t0 = time.time()
-        vm_ip = provision_vm(config)
+        vm_ip, host_cpus = provision_vm(config, parallel)
         summary["provision_s"] = round(time.time() - t0)
 
         # 2 — Deploy app
-        print(f"\n[deploy] Deploying app on {vm_ip} …")
+        log(label, f"Deploying app on {vm_ip} …")
         run([
             "ansible-playbook",
             "-i", str(INVENTORY),
             str(ANSIBLE_DIR / "playbooks" / "deploy_app.yml"),
             "-e", f"vm_ip={vm_ip}",
             "--private-key", str(SSH_KEY),
-        ])
+        ], label=label)
 
         # 3 — Seed DB
-        print(f"\n[seed] Seeding DB on {vm_ip} …")
+        log(label, f"Seeding DB on {vm_ip} …")
         run([
             "ansible-playbook",
             "-i", str(INVENTORY),
             str(ANSIBLE_DIR / "playbooks" / "seed_db.yml"),
             "-e", f"vm_ip={vm_ip}",
             "--private-key", str(SSH_KEY),
-        ])
+        ], label=label)
 
-        # 4 — Update Prometheus targets
+        # 4 — Update Prometheus targets, wait one scrape cycle
         update_prometheus_targets(config, vm_ip)
-        # Give Prometheus one scrape cycle to pick up the new targets before load starts
         time.sleep(SCRAPE_INTERVAL + 5)
 
-        # 5 — Run load steps
+        # 5 — Load ramp
         thresholds     = exp_conf["load_steps"]["saturation"]
         breaking_point = None
 
@@ -460,31 +589,31 @@ def run_one_experiment(config: dict, exp_conf: dict, dry_run: bool = False) -> d
                 duration=exp_conf["load_steps"]["duration"],
                 ramp_rate=exp_conf["load_steps"]["ramp_rate"],
                 run_dir=run_dir,
+                max_retries=max_retries,
+                parallel=parallel,
             )
 
-            # Collect system metrics from Prometheus for this step's time window
             collect_system_metrics(
                 vm_ip=vm_ip,
                 start_ts=t_start,
                 end_ts=t_end,
                 out_path=run_dir / f"u{users}_system.csv",
+                label=label,
             )
 
             saturated = not hard_fail and is_saturated(stats, thresholds)
             status = (
                 "locust_error" if hard_fail
-                else "saturated" if saturated
+                else "saturated"  if saturated
                 else "ok"
             )
             summary["steps"].append({"users": users, "status": status, **stats})
 
             if hard_fail:
                 summary["infra_failure_users"] = users
-                print(
-                    f"[locust] Hard infra failure at {users} users "
-                    f"(locust exit != 0, failure_rate={stats.get('failure_rate', '?'):.1%}, "
-                    f"p95={stats.get('p95_ms', '?'):.0f}ms) — stopping load ramp"
-                )
+                log(label, f"Hard infra failure at {users} users after all retries "
+                    f"(failure_rate={stats.get('failure_rate', '?'):.2%}, "
+                    f"p95={stats.get('p95_ms', '?'):.0f} ms) — stopping ramp.")
                 break
 
             if saturated:
@@ -495,92 +624,133 @@ def run_one_experiment(config: dict, exp_conf: dict, dry_run: bool = False) -> d
         limit = (
             f"threshold saturation at {breaking_point} users" if breaking_point
             else f"hard infra failure at {summary.get('infra_failure_users')} users"
-            if summary.get("infra_failure_users") else "no saturation up to max load"
+            if summary.get("infra_failure_users")
+            else "no saturation up to max load"
         )
-        print(f"\n[result] {label}: {limit}")
+        log(label, f"Result: {limit}")
 
     except Exception as exc:
         summary["error"] = str(exc)
-        print(f"[run_one_experiment] Unexpected error for {label}: {exc}")
+        log(label, f"Unexpected error: {exc}")
 
     finally:
-        # 6 — Always destroy, even on error
+        # 6 — Always destroy (releases CPU slot) and clear targets
         if vm_ip is not None:
             try:
-                destroy_vm(label)
+                destroy_vm(label, host_cpus)
             except Exception as exc:
-                print(f"[terraform] destroy failed (manual cleanup needed): {exc}")
+                log(label, f"destroy failed (manual cleanup needed): {exc}")
+        elif host_cpus:
+            _cpu_pool.release(host_cpus)
 
-        # Clear Prometheus targets so stale data doesn't confuse next run
-        clear_prometheus_targets()
+        clear_prometheus_targets(label)
 
-        # 7 — Always save summary (partial data is still valuable)
-        summary_file = run_dir / "summary.json"
-        summary_file.write_text(json.dumps(summary, indent=2))
-        print(f"[result] Summary → {summary_file}")
+        # 7 — Always save summary (partial data is valuable)
+        summary_path = run_dir / "summary.json"
+        summary_path.write_text(json.dumps(summary, indent=2))
+        log(label, f"Summary → {summary_path}")
 
     return summary
 
 
+# ── Results table ──────────────────────────────────────────────────────────────
+
 def print_comparison_table(summaries: list[dict]):
     if not summaries:
         return
-    print("\n" + "=" * 86)
+    print("\n" + "=" * 90)
     print("EXPERIMENT RESULTS SUMMARY")
-    print("=" * 86)
-    header = (
+    print("=" * 90)
+    print(
         f"{'Config':<16} {'Threshold sat.':>15} {'Infra failure':>14}"
         f" {'Max p95 (ms)':>13} {'Max fail%':>10}"
     )
-    print(header)
-    print("-" * 86)
+    print("-" * 90)
     for s in summaries:
         steps    = s.get("steps", [])
-        max_p95  = max((st.get("p95_ms", 0)       for st in steps), default=0)
-        max_fail = max((st.get("failure_rate", 0)  for st in steps), default=0) * 100
-        bp       = s.get("breaking_point_users")   or "—"
+        max_p95  = max((st.get("p95_ms",      0) for st in steps), default=0)
+        max_fail = max((st.get("failure_rate", 0) for st in steps), default=0) * 100
+        bp       = s.get("breaking_point_users")  or "—"
         infra    = s.get("infra_failure_users")    or "—"
-        error    = " [ERROR]" if s.get("error") else ""
+        tag      = " [ERROR]" if s.get("error") else ""
         print(
-            f"{s['label'] + error:<16} {str(bp):>15} {str(infra):>14}"
+            f"{s['label'] + tag:<16} {str(bp):>15} {str(infra):>14}"
             f" {max_p95:>13.0f} {max_fail:>9.1f}%"
         )
-    print("=" * 86)
+    print("=" * 90)
 
 
-# ── CLI ───────────────────────────────────────────────────────────────────────
+# ── CLI ────────────────────────────────────────────────────────────────────────
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Run Grid5000 provisioning experiments",
+        description="Run Grid5000 provisioning experiments (parallel-capable)",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     group = parser.add_mutually_exclusive_group(required=True)
-    group.add_argument("--config",   metavar="LABEL", help="Run a single experiment config")
-    group.add_argument("--all",      action="store_true",  help="Run all experiments from experiments.yml")
-    group.add_argument("--phase",    type=int, metavar="N", help="Run all Phase N experiments")
-    parser.add_argument("--dry-run", action="store_true",  help="Print plan without running anything")
-    parser.add_argument("--skip",    metavar="LABEL", action="append", default=[],
-                        help="Skip a config label (repeatable: --skip 2cpu-2gb --skip 2cpu-4gb)")
+    group.add_argument("--config", metavar="LABEL", help="Run a single experiment config")
+    group.add_argument("--all",    action="store_true", help="Run all experiments")
+    group.add_argument("--phase",  type=int, metavar="N", help="Run all Phase N experiments")
 
-    args = parser.parse_args()
+    parser.add_argument("--skip",     metavar="LABEL", action="append", default=[],
+                        help="Skip a config label (repeatable)")
+    parser.add_argument("--parallel", type=int, default=1, metavar="N",
+                        help="Max concurrent experiments. >1 enables CPU pinning via virsh.")
+    parser.add_argument("--retry",    type=int, default=2, metavar="N",
+                        help="Max retries for a transient Locust step failure (per step).")
+    parser.add_argument("--dry-run",  action="store_true",
+                        help="Print plan without running anything")
 
+    args     = parser.parse_args()
     exp_conf = load_experiments()
     configs  = select_configs(exp_conf, args.config, args.phase, skip=args.skip)
+    parallel = args.parallel > 1
 
-    print(f"Experiments to run ({len(configs)}): {[c['label'] for c in configs]}")
+    print(f"Configs to run ({len(configs)}): {[c['label'] for c in configs]}")
+    print(f"Parallelism: {args.parallel} | Retries per step: {args.retry}")
+    if parallel:
+        available_vm_cpus = HOST_TOTAL_CPUS - VM_CPU_START
+        total_vcpus = sum(c["vcpus"] for c in configs)
+        print(f"CPU pool: host CPUs {VM_CPU_START}–{HOST_TOTAL_CPUS - 1} "
+              f"({available_vm_cpus} available), configs need {total_vcpus} vCPUs total")
+        if total_vcpus > available_vm_cpus:
+            print(f"WARNING: total vCPUs ({total_vcpus}) exceeds pool size "
+                  f"({available_vm_cpus}). Experiments will queue for CPU slots.")
+        print(f"Locust pinned to host CPUs {LOCUST_CPU_MASK} (OS + monitoring range)")
+
     if args.dry_run:
         print("[dry-run] No changes will be made.")
 
-    summaries = []
-    for config in configs:
-        try:
-            summary = run_one_experiment(config, exp_conf, dry_run=args.dry_run)
-        except Exception as exc:
-            print(f"\n[ERROR] Config {config['label']} failed: {exc}")
-            print("[ERROR] Continuing to next config …\n")
-            summary = {"label": config["label"], "error": str(exc), "steps": []}
-        summaries.append(summary)
+    summaries: list[dict] = []
+
+    if args.parallel == 1:
+        # Sequential — simple loop, no threads
+        for config in configs:
+            summary = run_one_experiment(
+                config, exp_conf,
+                dry_run=args.dry_run,
+                max_retries=args.retry,
+                parallel=False,
+            )
+            summaries.append(summary)
+    else:
+        # Parallel — ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=args.parallel) as pool:
+            futures = {
+                pool.submit(
+                    run_one_experiment,
+                    config, exp_conf,
+                    args.dry_run, args.retry, True,
+                ): config["label"]
+                for config in configs
+            }
+            for future in as_completed(futures):
+                label = futures[future]
+                try:
+                    summaries.append(future.result())
+                except Exception as exc:
+                    print(f"[{label}] Unhandled exception: {exc}", flush=True)
+                    summaries.append({"label": label, "error": str(exc), "steps": []})
 
     if not args.dry_run:
         print_comparison_table(summaries)

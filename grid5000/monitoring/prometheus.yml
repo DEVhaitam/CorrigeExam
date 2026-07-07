@@ -18,35 +18,37 @@ scrape_configs:
         labels:
           role: 'host'
 
-  # ── Experiment VM (file-based SD, one file per scrape endpoint) ──────────────
+  # ── Experiment VMs (file-based SD — one file per config per endpoint) ─────────
   #
-  # run_experiment.py writes these 4 files before each experiment run, then
-  # reloads Prometheus via POST http://localhost:9092/-/reload.
-  # Each file contains one target entry:  ["<vm-ip>:<port>"] + config labels.
+  # In parallel mode run_experiment.py writes per-config files:
+  #   vm_<label>_node.json, vm_<label>_cadvisor.json, …
+  # Glob patterns below pick up all of them automatically.
+  # Each file contains one target entry: ["<vm-ip>:<port>"] + config labels.
+  # After each experiment the file is reset to [] to stop scraping that VM.
   #
-  # After the experiment, all files are reset to [] to stop scraping.
+  # In sequential mode the same naming applies (one active file at a time).
 
-  # System metrics of the experiment VM (CPU, RAM, disk, network)
+  # System metrics of the experiment VMs (CPU, RAM, disk, network)
   - job_name: 'vm-node-exporter'
     file_sd_configs:
-      - files: ['/etc/prometheus/targets/vm_node.json']
+      - files: ['/etc/prometheus/targets/vm_*_node.json']
         refresh_interval: 30s
 
   # Per-container metrics (correctexam-back, mysql, minio memory/CPU)
   - job_name: 'vm-cadvisor'
     file_sd_configs:
-      - files: ['/etc/prometheus/targets/vm_cadvisor.json']
+      - files: ['/etc/prometheus/targets/vm_*_cadvisor.json']
         refresh_interval: 30s
 
   # JVM, HikariCP, Micrometer HTTP metrics from the Quarkus backend
   - job_name: 'vm-correctexam-backend'
     metrics_path: /management/prometheus
     file_sd_configs:
-      - files: ['/etc/prometheus/targets/vm_app.json']
+      - files: ['/etc/prometheus/targets/vm_*_app.json']
         refresh_interval: 30s
 
   # MySQL / InnoDB metrics
   - job_name: 'vm-mysqld-exporter'
     file_sd_configs:
-      - files: ['/etc/prometheus/targets/vm_mysql.json']
+      - files: ['/etc/prometheus/targets/vm_*_mysql.json']
         refresh_interval: 30s
