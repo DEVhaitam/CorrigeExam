@@ -165,10 +165,10 @@ def select_configs(conf: dict, label: str | None, phase: int | None,
 def tf(*args, label: str, capture=False) -> subprocess.CompletedProcess:
     """Run terraform with a per-config state file so parallel runs don't collide."""
     state_file = str(TF_DIR / f"{label}.tfstate")
-    return run(
-        ["terraform", f"-state={state_file}", *args],
-        cwd=TF_DIR, capture=capture, label=label,
-    )
+    # -state is a subcommand flag (not global), so it must come after the subcommand name.
+    # args[0] is the subcommand (apply/destroy/output), args[1:] are its flags.
+    cmd = ["terraform", args[0], f"-state={state_file}", *args[1:]]
+    return run(cmd, cwd=TF_DIR, capture=capture, label=label)
 
 
 def _virsh_cleanup(label: str):
