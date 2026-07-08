@@ -1,0 +1,6 @@
+{
+  "label": "2cpu-2gb",
+  "run_id": "20260707_181934",
+  "steps": [],
+  "error": "Command '['terraform', 'apply', '-state=/home/haelhayan/CorrigeExam/grid5000/terraform/2cpu-2gb.tfstate', '-auto-approve', '-lock=false', '-var=vm_name=2cpu-2gb', '-var=vm_vcpus=2', '-var=vm_ram_mb=2048', '-var=vm_disk_gb=20', '-var=ssh_public_key_path=/home/haelhayan/.ssh/id_rsa.pub']' returned non-zero exit status 1."
+}

@@ -1,0 +1,56 @@
+Method,Name,Error,Occurrences
+PUT,PUT /api/student-responses (grade),"CatchResponseError('grade failed 500: {""details"":""Error id b504adc3-aeab-4a13-9aee-76773a2e7ac9-1543"",""stack"":""""}')",1
+PUT,PUT /api/student-responses (grade),"CatchResponseError('grade failed 500: {""details"":""Error id b504adc3-aeab-4a13-9aee-76773a2e7ac9-1387"",""stack"":""""}')",1
+PUT,PUT /api/student-responses (grade),"CatchResponseError('grade failed 500: {""details"":""Error id b504adc3-aeab-4a13-9aee-76773a2e7ac9-1570"",""stack"":""""}')",1
+PUT,PUT /api/student-responses (grade),"CatchResponseError('grade failed 500: {""details"":""Error id b504adc3-aeab-4a13-9aee-76773a2e7ac9-1428"",""stack"":""""}')",1
+PUT,PUT /api/student-responses (grade),"CatchResponseError('grade failed 500: {""details"":""Error id b504adc3-aeab-4a13-9aee-76773a2e7ac9-1548"",""stack"":""""}')",1
+PUT,PUT /api/student-responses (grade),"CatchResponseError('grade failed 500: {""details"":""Error id b504adc3-aeab-4a13-9aee-76773a2e7ac9-1446"",""stack"":""""}')",1
+PUT,PUT /api/student-responses (grade),"CatchResponseError('grade failed 500: {""details"":""Error id b504adc3-aeab-4a13-9aee-76773a2e7ac9-1386"",""stack"":""""}')",1
+GET,GET /api/students,CatchResponseError('status 500'),16
+PUT,PUT /api/student-responses (grade),"CatchResponseError('grade failed 500: {""details"":""Error id b504adc3-aeab-4a13-9aee-76773a2e7ac9-1451"",""stack"":""""}')",1
+PUT,PUT /api/student-responses (grade),"CatchResponseError('grade failed 500: {""details"":""Error id b504adc3-aeab-4a13-9aee-76773a2e7ac9-1514"",""stack"":""""}')",1
+PUT,PUT /api/student-responses (grade),"CatchResponseError('grade failed 500: {""details"":""Error id b504adc3-aeab-4a13-9aee-76773a2e7ac9-1501"",""stack"":""""}')",1
+PUT,PUT /api/student-responses (grade),"CatchResponseError('grade failed 500: {""details"":""Error id b504adc3-aeab-4a13-9aee-76773a2e7ac9-1404"",""stack"":""""}')",1
+GET,GET /api/exam-sheets,CatchResponseError('status 500'),12
+PUT,PUT /api/student-responses (grade),"CatchResponseError('grade failed 500: {""details"":""Error id b504adc3-aeab-4a13-9aee-76773a2e7ac9-1448"",""stack"":""""}')",1
+PUT,PUT /api/student-responses (grade),"CatchResponseError('grade failed 500: {""details"":""Error id b504adc3-aeab-4a13-9aee-76773a2e7ac9-1419"",""stack"":""""}')",1
+PUT,PUT /api/student-responses (grade),"CatchResponseError('grade failed 500: {""details"":""Error id b504adc3-aeab-4a13-9aee-76773a2e7ac9-1574"",""stack"":""""}')",1
+GET,GET /api/exams/{id},CatchResponseError('status 500'),25
+PUT,PUT /api/student-responses (grade),"CatchResponseError('grade failed 500: {""details"":""Error id b504adc3-aeab-4a13-9aee-76773a2e7ac9-1377"",""stack"":""""}')",1
+PUT,PUT /api/student-responses (grade),"CatchResponseError('grade failed 500: {""details"":""Error id b504adc3-aeab-4a13-9aee-76773a2e7ac9-1500"",""stack"":""""}')",1
+PUT,PUT /api/student-responses (grade),"CatchResponseError('grade failed 500: {""details"":""Error id b504adc3-aeab-4a13-9aee-76773a2e7ac9-1571"",""stack"":""""}')",1
+GET,GET /api/courses,CatchResponseError('status 500'),28
+GET,GET /api/exams,CatchResponseError('status 500'),25
+PUT,PUT /api/student-responses (grade),"CatchResponseError('grade failed 500: {""details"":""Error id b504adc3-aeab-4a13-9aee-76773a2e7ac9-1417"",""stack"":""""}')",1
+PUT,PUT /api/student-responses (grade),"CatchResponseError('grade failed 500: {""details"":""Error id b504adc3-aeab-4a13-9aee-76773a2e7ac9-1565"",""stack"":""""}')",1
+PUT,PUT /api/student-responses (grade),"CatchResponseError('grade failed 500: {""details"":""Error id b504adc3-aeab-4a13-9aee-76773a2e7ac9-1512"",""stack"":""""}')",1
+PUT,PUT /api/student-responses (grade),"CatchResponseError('grade failed 500: {""details"":""Error id b504adc3-aeab-4a13-9aee-76773a2e7ac9-1473"",""stack"":""""}')",1
+PUT,PUT /api/student-responses (grade),"CatchResponseError('grade failed 500: {""details"":""Error id b504adc3-aeab-4a13-9aee-76773a2e7ac9-1459"",""stack"":""""}')",1
+PUT,PUT /api/student-responses (grade),"CatchResponseError('grade failed 500: {""details"":""Error id b504adc3-aeab-4a13-9aee-76773a2e7ac9-1542"",""stack"":""""}')",1
+PUT,PUT /api/student-responses (grade),"CatchResponseError('grade failed 500: {""details"":""Error id b504adc3-aeab-4a13-9aee-76773a2e7ac9-1444"",""stack"":""""}')",1
+GET,GET /api/questions,CatchResponseError('status 500'),11
+PUT,PUT /api/student-responses (grade),"CatchResponseError('grade failed 500: {""details"":""Error id b504adc3-aeab-4a13-9aee-76773a2e7ac9-1411"",""stack"":""""}')",1
+PUT,PUT /api/student-responses (grade),"CatchResponseError('grade failed 500: {""details"":""Error id b504adc3-aeab-4a13-9aee-76773a2e7ac9-1456"",""stack"":""""}')",1
+PUT,PUT /api/student-responses (grade),"CatchResponseError('grade failed 500: {""details"":""Error id b504adc3-aeab-4a13-9aee-76773a2e7ac9-1476"",""stack"":""""}')",1
+PUT,PUT /api/student-responses (grade),"CatchResponseError('grade failed 500: {""details"":""Error id b504adc3-aeab-4a13-9aee-76773a2e7ac9-1549"",""stack"":""""}')",1
+PUT,PUT /api/student-responses (grade),"CatchResponseError('grade failed 500: {""details"":""Error id b504adc3-aeab-4a13-9aee-76773a2e7ac9-1457"",""stack"":""""}')",1
+PUT,PUT /api/student-responses (grade),"CatchResponseError('grade failed 500: {""details"":""Error id b504adc3-aeab-4a13-9aee-76773a2e7ac9-1414"",""stack"":""""}')",1
+PUT,PUT /api/student-responses (grade),"CatchResponseError('grade failed 500: {""details"":""Error id b504adc3-aeab-4a13-9aee-76773a2e7ac9-1510"",""stack"":""""}')",1
+GET,GET /api/student-responses,CatchResponseError('status 500'),9
+PUT,PUT /api/student-responses (grade),"CatchResponseError('grade failed 500: {""details"":""Error id b504adc3-aeab-4a13-9aee-76773a2e7ac9-1400"",""stack"":""""}')",1
+PUT,PUT /api/student-responses (grade),"CatchResponseError('grade failed 500: {""details"":""Error id b504adc3-aeab-4a13-9aee-76773a2e7ac9-1586"",""stack"":""""}')",1
+PUT,PUT /api/student-responses (grade),"CatchResponseError('grade failed 500: {""details"":""Error id b504adc3-aeab-4a13-9aee-76773a2e7ac9-1460"",""stack"":""""}')",1
+PUT,PUT /api/student-responses (grade),"CatchResponseError('grade failed 500: {""details"":""Error id b504adc3-aeab-4a13-9aee-76773a2e7ac9-1507"",""stack"":""""}')",1
+PUT,PUT /api/student-responses (grade),"CatchResponseError('grade failed 500: {""details"":""Error id b504adc3-aeab-4a13-9aee-76773a2e7ac9-1496"",""stack"":""""}')",1
+GET,GET /api/questions (switch),CatchResponseError('status 500'),4
+PUT,PUT /api/student-responses (grade),"CatchResponseError('grade failed 500: {""details"":""Error id b504adc3-aeab-4a13-9aee-76773a2e7ac9-1421"",""stack"":""""}')",1
+PUT,PUT /api/student-responses (grade),"CatchResponseError('grade failed 500: {""details"":""Error id b504adc3-aeab-4a13-9aee-76773a2e7ac9-1552"",""stack"":""""}')",1
+PUT,PUT /api/student-responses (grade),"CatchResponseError('grade failed 500: {""details"":""Error id b504adc3-aeab-4a13-9aee-76773a2e7ac9-1402"",""stack"":""""}')",1
+PUT,PUT /api/student-responses (grade),"CatchResponseError('grade failed 500: {""details"":""Error id b504adc3-aeab-4a13-9aee-76773a2e7ac9-1442"",""stack"":""""}')",1
+PUT,PUT /api/student-responses (grade),"CatchResponseError('grade failed 500: {""details"":""Error id b504adc3-aeab-4a13-9aee-76773a2e7ac9-1474"",""stack"":""""}')",1
+PUT,PUT /api/student-responses (grade),"CatchResponseError('grade failed 500: {""details"":""Error id b504adc3-aeab-4a13-9aee-76773a2e7ac9-1397"",""stack"":""""}')",1
+PUT,PUT /api/student-responses (grade),"CatchResponseError('grade failed 500: {""details"":""Error id b504adc3-aeab-4a13-9aee-76773a2e7ac9-1394"",""stack"":""""}')",1
+GET,GET /api/exam-sheets (progress),CatchResponseError('status 500'),7
+PUT,PUT /api/student-responses (grade),"CatchResponseError('grade failed 500: {""details"":""Error id b504adc3-aeab-4a13-9aee-76773a2e7ac9-1423"",""stack"":""""}')",1
+GET,GET /api/final-results,CatchResponseError('status 500'),6
+PUT,PUT /api/student-responses (grade),"CatchResponseError('grade failed 500: {""details"":""Error id b504adc3-aeab-4a13-9aee-76773a2e7ac9-1525"",""stack"":""""}')",1
